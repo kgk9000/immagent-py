@@ -10,7 +10,7 @@ from immagent.db import Database
 from immagent.llm import Model
 from immagent.mcp import MCPManager
 from immagent.messages import Conversation, Message, ToolCall
-from immagent.turn import (
+from immagent.api import (
     advance,
     create_agent,
     get_lineage,
@@ -18,6 +18,7 @@ from immagent.turn import (
     load_agent,
     save,
 )
+from immagent.cache import clear_cache
 
 __all__ = [
     # Core types
@@ -35,6 +36,7 @@ __all__ = [
     "Model",
     # Functions
     "advance",
+    "clear_cache",
     "create_agent",
     "get_lineage",
     "get_messages",

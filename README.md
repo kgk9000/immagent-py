@@ -12,6 +12,7 @@ An immutable agent architecture for Python. Every state transition creates a new
 | `immagent.load_agent()`   | Load agent from cache/database |
 | `immagent.get_messages()` | Get conversation messages |
 | `immagent.get_lineage()`  | Walk agent's parent chain |
+| `immagent.clear_cache()`  | Clear the in-memory cache |
 | `immagent.Model`          | Enum of common LLM models |
 
 ## Core Concept
@@ -259,5 +260,5 @@ src/immagent/
 ├── cache.py        # In-memory UUID→Asset cache
 ├── llm.py          # LiteLLM wrapper
 ├── mcp.py          # MCP client for tools
-└── turn.py         # advance(), create_agent(), save(), load_agent()
+└── api.py          # advance(), create_agent(), save(), load_agent()
 ```
