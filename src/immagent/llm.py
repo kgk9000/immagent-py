@@ -31,14 +31,18 @@ async def complete(
     msgs: list[messages.Message],
     system: str,
     tools: list[dict[str, Any]] | None = None,
+    max_retries: int = 3,
 ) -> messages.Message:
     """Call an LLM via LiteLLM and return the response as a Message.
+
+    Uses exponential backoff for retries on rate limits and transient errors.
 
     Args:
         model: LiteLLM model string (e.g., "anthropic/claude-sonnet-4-20250514")
         msgs: Conversation history as Message objects
         system: System prompt content
         tools: Optional list of tools in OpenAI function format
+        max_retries: Number of retry attempts for transient failures (default: 3)
 
     Returns:
         An assistant Message with the response
@@ -51,13 +55,14 @@ async def complete(
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": litellm_messages,
+        "num_retries": max_retries,
     }
     if tools:
         kwargs["tools"] = tools
 
-    # Call LiteLLM
+    # Call LiteLLM (handles retries with exponential backoff internally)
     response = await litellm.acompletion(**kwargs)
-    choice = response.choices[0].message
+    choice = response.choices[0].message  # type: ignore[union-attr]
 
     # Parse tool calls if present
     tool_calls: tuple[messages.ToolCall, ...] | None = None
@@ -65,7 +70,7 @@ async def complete(
         tool_calls = tuple(
             messages.ToolCall(
                 id=tc.id,
-                name=tc.function.name,
+                name=tc.function.name or "",
                 arguments=tc.function.arguments,
             )
             for tc in choice.tool_calls

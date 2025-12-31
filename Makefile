@@ -22,9 +22,12 @@ lint: ## Lint code with ruff
 fix: ## Fix auto-fixable lint errors
 	uv run ruff check --fix src/ tests/
 
+.PHONY: typecheck
+typecheck: ## Run type checker (pyright)
+	uv run pyright src/
+
 .PHONY: check
-check: lint ## Run all checks (lint + type check)
-	uv run python -c "import immagent"
+check: lint typecheck ## Run all checks (lint + type check)
 
 .PHONY: test
 test: ## Run tests

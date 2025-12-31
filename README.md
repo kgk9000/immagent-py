@@ -223,12 +223,32 @@ make fmt
 # Lint
 make lint
 
+# Type check
+make typecheck
+
+# Run all checks (lint + typecheck)
+make check
+
 # Run tests (requires Docker for PostgreSQL)
 make test
 
 # Run with coverage
 make test-cov
 ```
+
+### API Keys
+
+For LLM integration tests, create a `.env` file with your API key:
+
+```bash
+# Option 1: Create .env directly
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' > .env
+
+# Option 2: Symlink to existing env file
+ln -s ~/.env/anthropic.env .env
+```
+
+See `.env.example` for the expected format. The `.env` file is gitignored.
 
 ### Running Tests
 
@@ -238,14 +258,8 @@ Tests use [testcontainers](https://testcontainers-python.readthedocs.io/) to spi
 # Make sure Docker is running
 docker ps
 
-# Run all tests
+# Run all tests (sources .env automatically)
 make test
-```
-
-For LLM integration tests, set your API key:
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-... make test
 ```
 
 ## Project Structure

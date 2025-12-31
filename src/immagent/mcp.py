@@ -74,8 +74,9 @@ async def execute_tool(
         # Concatenate all text content
         texts = []
         for item in result.content:
-            if hasattr(item, "text"):
-                texts.append(item.text)
+            text = getattr(item, "text", None)
+            if text is not None:
+                texts.append(text)
             else:
                 # For non-text content, serialize to JSON
                 texts.append(json.dumps(item.model_dump()))

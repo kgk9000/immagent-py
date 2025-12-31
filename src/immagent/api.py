@@ -17,13 +17,14 @@ async def advance(
     db: db_mod.Database,
     mcp: mcp_mod.MCPManager | None = None,
     max_tool_rounds: int = 10,
+    max_retries: int = 3,
 ) -> tuple[agent_mod.ImmAgent, list[assets.Asset]]:
     """Advance the agent with a user message.
 
     This is the main entry point for interacting with an agent. It:
     1. Loads the conversation history
     2. Adds the user message
-    3. Calls the LLM
+    3. Calls the LLM (with retries for transient failures)
     4. If tools are requested, executes them and loops
     5. Creates a new agent with the updated conversation
 
@@ -35,6 +36,7 @@ async def advance(
         db: Database connection for loading conversation history
         mcp: Optional MCP manager for tool calling
         max_tool_rounds: Maximum number of tool-use rounds (safety limit)
+        max_retries: Number of retry attempts for LLM calls (default: 3)
 
     Returns:
         A tuple of (new_agent, assets) where assets is a list of all new
@@ -64,12 +66,13 @@ async def advance(
 
     # Tool loop
     for _ in range(max_tool_rounds):
-        # Call LLM
+        # Call LLM (with retries for transient failures)
         assistant_message = await llm.complete(
             model=agent.model,
             msgs=msgs,
             system=system_prompt.content,
             tools=tools,
+            max_retries=max_retries,
         )
         msgs.append(assistant_message)
         new_messages.append(assistant_message)
