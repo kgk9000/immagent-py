@@ -1,7 +1,7 @@
 """Base asset types for the immutable agent system."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 
@@ -12,7 +12,7 @@ def new_id() -> UUID:
 
 def now() -> datetime:
     """Get current UTC datetime."""
-    return datetime.utcnow()
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)

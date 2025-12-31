@@ -17,7 +17,9 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "ruff",
+    "testcontainers[postgres]",
 ]
 
 [build-system]
