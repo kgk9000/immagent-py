@@ -1,0 +1,31 @@
+[project]
+name = "immagent"
+version = "0.1.0"
+description = "Immutable agent architecture with UUID-based identity"
+readme = "README.md"
+authors = [
+    { name = "Kleanthes Koniaris", email = "kgk@koniaris.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "litellm",
+    "asyncpg",
+    "mcp",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
