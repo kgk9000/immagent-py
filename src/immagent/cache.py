@@ -6,28 +6,28 @@ Once an asset is loaded, it never changes.
 
 from uuid import UUID
 
-from immagent.agent import ImmAgent
-from immagent.assets import Asset, TextAsset
-from immagent.db import Database
-from immagent.messages import Conversation, Message
+import immagent.agent as agent_mod
+import immagent.assets as assets
+import immagent.db as db_mod
+import immagent.messages as messages
 
 # Global cache - safe because assets are immutable
-_cache: dict[UUID, Asset] = {}
+_cache: dict[UUID, assets.Asset] = {}
 
 
-def get_cached(asset_id: UUID) -> Asset | None:
+def get_cached(asset_id: UUID) -> assets.Asset | None:
     """Get an asset from cache if present."""
     return _cache.get(asset_id)
 
 
-def cache(asset: Asset) -> None:
+def cache(asset: assets.Asset) -> None:
     """Add an asset to the cache."""
     _cache[asset.id] = asset
 
 
-def cache_all(*assets: Asset) -> None:
+def cache_all(*assets_to_cache: assets.Asset) -> None:
     """Add multiple assets to the cache."""
-    for asset in assets:
+    for asset in assets_to_cache:
         _cache[asset.id] = asset
 
 
@@ -36,11 +36,11 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-async def get_text_asset(db: Database, asset_id: UUID) -> TextAsset | None:
+async def get_text_asset(db: db_mod.Database, asset_id: UUID) -> assets.TextAsset | None:
     """Get a TextAsset from cache or database."""
     cached = get_cached(asset_id)
     if cached is not None:
-        return cached if isinstance(cached, TextAsset) else None
+        return cached if isinstance(cached, assets.TextAsset) else None
 
     asset = await db.load_text_asset(asset_id)
     if asset:
@@ -48,11 +48,11 @@ async def get_text_asset(db: Database, asset_id: UUID) -> TextAsset | None:
     return asset
 
 
-async def get_message(db: Database, message_id: UUID) -> Message | None:
+async def get_message(db: db_mod.Database, message_id: UUID) -> messages.Message | None:
     """Get a Message from cache or database."""
     cached = get_cached(message_id)
     if cached is not None:
-        return cached if isinstance(cached, Message) else None
+        return cached if isinstance(cached, messages.Message) else None
 
     message = await db.load_message(message_id)
     if message:
@@ -60,15 +60,15 @@ async def get_message(db: Database, message_id: UUID) -> Message | None:
     return message
 
 
-async def get_messages(db: Database, message_ids: tuple[UUID, ...]) -> list[Message]:
+async def get_messages(db: db_mod.Database, message_ids: tuple[UUID, ...]) -> list[messages.Message]:
     """Get multiple Messages, using cache where possible."""
-    result: list[Message] = []
+    result: list[messages.Message] = []
     to_load: list[UUID] = []
 
     # Check cache first
     for mid in message_ids:
         cached = get_cached(mid)
-        if cached is not None and isinstance(cached, Message):
+        if cached is not None and isinstance(cached, messages.Message):
             result.append(cached)
         else:
             to_load.append(mid)
@@ -80,18 +80,18 @@ async def get_messages(db: Database, message_ids: tuple[UUID, ...]) -> list[Mess
             cache(msg)
 
     # Rebuild in correct order
-    messages_by_id = {m.id: m for m in result}
+    msgs_by_id = {m.id: m for m in result}
     for msg in await db.load_messages(tuple(to_load)):
-        messages_by_id[msg.id] = msg
+        msgs_by_id[msg.id] = msg
 
-    return [messages_by_id[mid] for mid in message_ids if mid in messages_by_id]
+    return [msgs_by_id[mid] for mid in message_ids if mid in msgs_by_id]
 
 
-async def get_conversation(db: Database, conversation_id: UUID) -> Conversation | None:
+async def get_conversation(db: db_mod.Database, conversation_id: UUID) -> messages.Conversation | None:
     """Get a Conversation from cache or database."""
     cached = get_cached(conversation_id)
     if cached is not None:
-        return cached if isinstance(cached, Conversation) else None
+        return cached if isinstance(cached, messages.Conversation) else None
 
     conversation = await db.load_conversation(conversation_id)
     if conversation:
@@ -99,11 +99,11 @@ async def get_conversation(db: Database, conversation_id: UUID) -> Conversation 
     return conversation
 
 
-async def get_agent(db: Database, agent_id: UUID) -> ImmAgent | None:
+async def get_agent(db: db_mod.Database, agent_id: UUID) -> agent_mod.ImmAgent | None:
     """Get an ImmAgent from cache or database."""
     cached = get_cached(agent_id)
     if cached is not None:
-        return cached if isinstance(cached, ImmAgent) else None
+        return cached if isinstance(cached, agent_mod.ImmAgent) else None
 
     agent = await db.load_agent(agent_id)
     if agent:

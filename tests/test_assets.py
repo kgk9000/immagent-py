@@ -1,14 +1,13 @@
 """Tests for asset persistence and retrieval."""
 
-import pytest
-
-from immagent import Database, ImmAgent, Conversation, Message, TextAsset
-from immagent.assets import new_id
-from immagent.cache import get_agent, get_conversation, get_message, get_text_asset
+import immagent.cache as cache
+import immagent.db as db_mod
+import immagent.messages as messages
+from immagent import ImmAgent, TextAsset
 
 
 class TestTextAsset:
-    async def test_save_and_load(self, db: Database):
+    async def test_save_and_load(self, db: db_mod.Database):
         """TextAsset can be saved and loaded."""
         asset = TextAsset.create("Hello, world!")
 
@@ -19,23 +18,23 @@ class TestTextAsset:
         assert loaded.id == asset.id
         assert loaded.content == "Hello, world!"
 
-    async def test_cache_hit(self, db: Database):
+    async def test_cache_hit(self, db: db_mod.Database):
         """TextAsset is cached after first load."""
         asset = TextAsset.create("Cached content")
         await db.save_text_asset(asset)
 
         # First load - from DB
-        loaded1 = await get_text_asset(db, asset.id)
+        loaded1 = await cache.get_text_asset(db, asset.id)
         # Second load - from cache
-        loaded2 = await get_text_asset(db, asset.id)
+        loaded2 = await cache.get_text_asset(db, asset.id)
 
         assert loaded1 is loaded2  # Same object reference
 
 
 class TestMessage:
-    async def test_user_message(self, db: Database):
+    async def test_user_message(self, db: db_mod.Database):
         """User message can be saved and loaded."""
-        msg = Message.user("What's the weather?")
+        msg = messages.Message.user("What's the weather?")
 
         await db.save_message(msg)
         loaded = await db.load_message(msg.id)
@@ -44,14 +43,12 @@ class TestMessage:
         assert loaded.role == "user"
         assert loaded.content == "What's the weather?"
 
-    async def test_assistant_message_with_tool_calls(self, db: Database):
+    async def test_assistant_message_with_tool_calls(self, db: db_mod.Database):
         """Assistant message with tool calls persists correctly."""
-        from immagent.messages import ToolCall
-
         tool_calls = (
-            ToolCall(id="call_123", name="get_weather", arguments='{"city": "NYC"}'),
+            messages.ToolCall(id="call_123", name="get_weather", arguments='{"city": "NYC"}'),
         )
-        msg = Message.assistant("Let me check the weather.", tool_calls=tool_calls)
+        msg = messages.Message.assistant("Let me check the weather.", tool_calls=tool_calls)
 
         await db.save_message(msg)
         loaded = await db.load_message(msg.id)
@@ -62,9 +59,9 @@ class TestMessage:
         assert len(loaded.tool_calls) == 1
         assert loaded.tool_calls[0].name == "get_weather"
 
-    async def test_tool_result_message(self, db: Database):
+    async def test_tool_result_message(self, db: db_mod.Database):
         """Tool result message persists correctly."""
-        msg = Message.tool_result("call_123", "Sunny, 72°F")
+        msg = messages.Message.tool_result("call_123", "Sunny, 72°F")
 
         await db.save_message(msg)
         loaded = await db.load_message(msg.id)
@@ -76,9 +73,9 @@ class TestMessage:
 
 
 class TestConversation:
-    async def test_empty_conversation(self, db: Database):
+    async def test_empty_conversation(self, db: db_mod.Database):
         """Empty conversation can be saved and loaded."""
-        conv = Conversation.create()
+        conv = messages.Conversation.create()
 
         await db.save_conversation(conv)
         loaded = await db.load_conversation(conv.id)
@@ -86,24 +83,24 @@ class TestConversation:
         assert loaded is not None
         assert loaded.message_ids == ()
 
-    async def test_conversation_with_messages(self, db: Database):
+    async def test_conversation_with_messages(self, db: db_mod.Database):
         """Conversation preserves message order."""
-        msg1 = Message.user("Hello")
-        msg2 = Message.assistant("Hi there!")
+        msg1 = messages.Message.user("Hello")
+        msg2 = messages.Message.assistant("Hi there!")
         await db.save_message(msg1)
         await db.save_message(msg2)
 
-        conv = Conversation.create((msg1.id, msg2.id))
+        conv = messages.Conversation.create((msg1.id, msg2.id))
         await db.save_conversation(conv)
         loaded = await db.load_conversation(conv.id)
 
         assert loaded is not None
         assert loaded.message_ids == (msg1.id, msg2.id)
 
-    async def test_with_messages_creates_new_conversation(self, db: Database):
+    async def test_with_messages_creates_new_conversation(self, db: db_mod.Database):
         """with_messages returns a new conversation with new ID."""
-        conv1 = Conversation.create()
-        msg = Message.user("Hello")
+        conv1 = messages.Conversation.create()
+        msg = messages.Message.user("Hello")
 
         conv2 = conv1.with_messages(msg.id)
 
@@ -112,12 +109,12 @@ class TestConversation:
 
 
 class TestImmAgent:
-    async def test_create_agent(self, db: Database):
+    async def test_create_agent(self, db: db_mod.Database):
         """Agent can be created and saved."""
         prompt = TextAsset.create("You are helpful.")
         await db.save_text_asset(prompt)
 
-        agent, conv = ImmAgent.create(
+        agent, conv = ImmAgent._create(
             name="TestBot",
             system_prompt=prompt,
             model="anthropic/claude-sonnet-4-20250514",
@@ -132,12 +129,12 @@ class TestImmAgent:
         assert loaded.system_prompt_id == prompt.id
         assert loaded.parent_id is None
 
-    async def test_evolve_creates_new_agent(self, db: Database):
-        """evolve creates a new agent with parent link."""
+    async def test_evolve_creates_new_agent(self, db: db_mod.Database):
+        """_evolve creates a new agent with parent link."""
         prompt = TextAsset.create("You are helpful.")
         await db.save_text_asset(prompt)
 
-        agent1, conv1 = ImmAgent.create(
+        agent1, conv1 = ImmAgent._create(
             name="TestBot",
             system_prompt=prompt,
             model="anthropic/claude-sonnet-4-20250514",
@@ -146,12 +143,12 @@ class TestImmAgent:
         await db.save_agent(agent1)
 
         # Evolve with new conversation
-        msg = Message.user("Hello")
+        msg = messages.Message.user("Hello")
         await db.save_message(msg)
         conv2 = conv1.with_messages(msg.id)
         await db.save_conversation(conv2)
 
-        agent2 = agent1.evolve(conv2)
+        agent2 = agent1._evolve(conv2)
         await db.save_agent(agent2)
 
         assert agent2.id != agent1.id

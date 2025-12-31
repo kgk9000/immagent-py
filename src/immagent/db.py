@@ -5,9 +5,9 @@ from uuid import UUID
 
 import asyncpg
 
-from immagent.agent import ImmAgent
-from immagent.assets import Asset, TextAsset
-from immagent.messages import Conversation, Message, ToolCall
+import immagent.agent as agent_mod
+import immagent.assets as assets
+import immagent.messages as messages
 
 SCHEMA = """
 -- Text assets (system prompts, etc.)
@@ -67,6 +67,14 @@ class Database:
         """Close the database connection pool."""
         await self._pool.close()
 
+    async def __aenter__(self) -> "Database":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit - closes the pool."""
+        await self.close()
+
     async def init_schema(self) -> None:
         """Initialize the database schema."""
         async with self._pool.acquire() as conn:
@@ -74,7 +82,7 @@ class Database:
 
     # -- TextAsset --
 
-    async def save_text_asset(self, asset: TextAsset) -> None:
+    async def save_text_asset(self, asset: assets.TextAsset) -> None:
         """Save a TextAsset to the database."""
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -88,7 +96,7 @@ class Database:
                 asset.content,
             )
 
-    async def load_text_asset(self, asset_id: UUID) -> TextAsset | None:
+    async def load_text_asset(self, asset_id: UUID) -> assets.TextAsset | None:
         """Load a TextAsset by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -96,7 +104,7 @@ class Database:
                 asset_id,
             )
             if row:
-                return TextAsset(
+                return assets.TextAsset(
                     id=row["id"],
                     created_at=row["created_at"],
                     content=row["content"],
@@ -105,7 +113,7 @@ class Database:
 
     # -- Message --
 
-    async def save_message(self, message: Message) -> None:
+    async def save_message(self, message: messages.Message) -> None:
         """Save a Message to the database."""
         tool_calls_json = None
         if message.tool_calls:
@@ -131,7 +139,7 @@ class Database:
                 message.tool_call_id,
             )
 
-    async def load_message(self, message_id: UUID) -> Message | None:
+    async def load_message(self, message_id: UUID) -> messages.Message | None:
         """Load a Message by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -143,10 +151,10 @@ class Database:
                 if row["tool_calls"]:
                     tc_data = json.loads(row["tool_calls"])
                     tool_calls = tuple(
-                        ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
+                        messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
                         for tc in tc_data
                     )
-                return Message(
+                return messages.Message(
                     id=row["id"],
                     created_at=row["created_at"],
                     role=row["role"],
@@ -156,7 +164,7 @@ class Database:
                 )
             return None
 
-    async def load_messages(self, message_ids: tuple[UUID, ...]) -> list[Message]:
+    async def load_messages(self, message_ids: tuple[UUID, ...]) -> list[messages.Message]:
         """Load multiple messages by ID, preserving order."""
         if not message_ids:
             return []
@@ -168,16 +176,16 @@ class Database:
             )
 
         # Build a dict for ordering
-        messages_by_id: dict[UUID, Message] = {}
+        messages_by_id: dict[UUID, messages.Message] = {}
         for row in rows:
             tool_calls = None
             if row["tool_calls"]:
                 tc_data = json.loads(row["tool_calls"])
                 tool_calls = tuple(
-                    ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
+                    messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
                     for tc in tc_data
                 )
-            messages_by_id[row["id"]] = Message(
+            messages_by_id[row["id"]] = messages.Message(
                 id=row["id"],
                 created_at=row["created_at"],
                 role=row["role"],
@@ -191,7 +199,7 @@ class Database:
 
     # -- Conversation --
 
-    async def save_conversation(self, conversation: Conversation) -> None:
+    async def save_conversation(self, conversation: messages.Conversation) -> None:
         """Save a Conversation to the database."""
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -205,7 +213,7 @@ class Database:
                 list(conversation.message_ids),
             )
 
-    async def load_conversation(self, conversation_id: UUID) -> Conversation | None:
+    async def load_conversation(self, conversation_id: UUID) -> messages.Conversation | None:
         """Load a Conversation by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -213,7 +221,7 @@ class Database:
                 conversation_id,
             )
             if row:
-                return Conversation(
+                return messages.Conversation(
                     id=row["id"],
                     created_at=row["created_at"],
                     message_ids=tuple(row["message_ids"]),
@@ -222,7 +230,7 @@ class Database:
 
     # -- ImmAgent --
 
-    async def save_agent(self, agent: ImmAgent) -> None:
+    async def save_agent(self, agent: agent_mod.ImmAgent) -> None:
         """Save an ImmAgent to the database."""
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -240,7 +248,7 @@ class Database:
                 agent.model,
             )
 
-    async def load_agent(self, agent_id: UUID) -> ImmAgent | None:
+    async def load_agent(self, agent_id: UUID) -> agent_mod.ImmAgent | None:
         """Load an ImmAgent by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -251,7 +259,7 @@ class Database:
                 agent_id,
             )
             if row:
-                return ImmAgent(
+                return agent_mod.ImmAgent(
                     id=row["id"],
                     created_at=row["created_at"],
                     name=row["name"],
@@ -264,20 +272,21 @@ class Database:
 
     # -- Generic save for any asset --
 
-    async def save(self, asset: Asset) -> None:
+    async def save(self, asset: assets.Asset) -> None:
         """Save any asset to the appropriate table."""
-        if isinstance(asset, ImmAgent):
-            await self.save_agent(asset)
-        elif isinstance(asset, Conversation):
-            await self.save_conversation(asset)
-        elif isinstance(asset, Message):
-            await self.save_message(asset)
-        elif isinstance(asset, TextAsset):
-            await self.save_text_asset(asset)
-        else:
-            raise TypeError(f"Unknown asset type: {type(asset)}")
+        match asset:
+            case agent_mod.ImmAgent():
+                await self.save_agent(asset)
+            case messages.Conversation():
+                await self.save_conversation(asset)
+            case messages.Message():
+                await self.save_message(asset)
+            case assets.TextAsset():
+                await self.save_text_asset(asset)
+            case _:
+                raise TypeError(f"Unknown asset type: {type(asset)}")
 
-    async def save_all(self, *assets: Asset) -> None:
+    async def save_all(self, *assets_to_save: assets.Asset) -> None:
         """Save multiple assets."""
-        for asset in assets:
+        for asset in assets_to_save:
             await self.save(asset)

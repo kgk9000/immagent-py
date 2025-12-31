@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-from immagent.assets import Asset, new_id, now
+import immagent.assets as assets
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
-class Message(Asset):
+class Message(assets.Asset):
     """An immutable message in a conversation.
 
     Messages can be from the user, assistant, or tool (for tool results).
@@ -35,8 +35,8 @@ class Message(Asset):
     def user(cls, content: str) -> "Message":
         """Create a user message."""
         return cls(
-            id=new_id(),
-            created_at=now(),
+            id=assets.new_id(),
+            created_at=assets.now(),
             role="user",
             content=content,
         )
@@ -49,8 +49,8 @@ class Message(Asset):
     ) -> "Message":
         """Create an assistant message."""
         return cls(
-            id=new_id(),
-            created_at=now(),
+            id=assets.new_id(),
+            created_at=assets.now(),
             role="assistant",
             content=content,
             tool_calls=tool_calls,
@@ -60,8 +60,8 @@ class Message(Asset):
     def tool_result(cls, tool_call_id: str, content: str) -> "Message":
         """Create a tool result message."""
         return cls(
-            id=new_id(),
-            created_at=now(),
+            id=assets.new_id(),
+            created_at=assets.now(),
             role="tool",
             content=content,
             tool_call_id=tool_call_id,
@@ -91,7 +91,7 @@ class Message(Asset):
 
 
 @dataclass(frozen=True)
-class Conversation(Asset):
+class Conversation(assets.Asset):
     """An immutable conversation, which is an ordered list of message IDs.
 
     New messages create a new Conversation with a new ID.
@@ -103,15 +103,15 @@ class Conversation(Asset):
     def create(cls, message_ids: tuple[UUID, ...] | None = None) -> "Conversation":
         """Create a new conversation."""
         return cls(
-            id=new_id(),
-            created_at=now(),
+            id=assets.new_id(),
+            created_at=assets.now(),
             message_ids=message_ids or (),
         )
 
     def with_messages(self, *new_message_ids: UUID) -> "Conversation":
         """Create a new conversation with additional messages appended."""
         return Conversation(
-            id=new_id(),
-            created_at=now(),
+            id=assets.new_id(),
+            created_at=assets.now(),
             message_ids=self.message_ids + new_message_ids,
         )

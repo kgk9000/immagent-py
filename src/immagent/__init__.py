@@ -7,9 +7,17 @@ creates a new agent with a fresh UUID4.
 from immagent.agent import ImmAgent
 from immagent.assets import Asset, TextAsset
 from immagent.db import Database
+from immagent.llm import Model
 from immagent.mcp import MCPManager
 from immagent.messages import Conversation, Message, ToolCall
-from immagent.turn import create_agent, process_turn
+from immagent.turn import (
+    advance,
+    create_agent,
+    get_lineage,
+    get_messages,
+    load_agent,
+    save,
+)
 
 __all__ = [
     # Core types
@@ -23,7 +31,13 @@ __all__ = [
     "Database",
     # MCP
     "MCPManager",
+    # Models
+    "Model",
     # Functions
+    "advance",
     "create_agent",
-    "process_turn",
+    "get_lineage",
+    "get_messages",
+    "load_agent",
+    "save",
 ]

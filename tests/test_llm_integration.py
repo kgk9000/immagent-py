@@ -17,11 +17,11 @@ needs_api_key = pytest.mark.skipif(
 @needs_api_key
 async def test_simple_completion():
     """Claude Haiku can convert Fahrenheit to Celsius."""
-    messages = [Message.user("Convert 32F to Celsius. Reply with just the number.")]
+    msgs = [Message.user("Convert 32F to Celsius. Reply with just the number.")]
 
     response = await complete(
         model="anthropic/claude-3-5-haiku-20241022",
-        messages=messages,
+        msgs=msgs,
         system="You are a helpful assistant. Be concise.",
     )
 
