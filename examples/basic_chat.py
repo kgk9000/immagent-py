@@ -33,16 +33,16 @@ async def main():
         "postgresql://postgres:postgres@localhost:5432/postgres",
     )
 
-    async with await immagent.Database.connect(db_url) as db:
-        await db.init_schema()
+    async with await immagent.Store.connect(db_url) as store:
+        await store.init_schema()
 
         # Create a new agent
-        agent, assets = immagent.create_agent(
+        agent = store.create_agent(
             name="Assistant",
             system_prompt="You are a helpful assistant. Be concise.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await db.save(*assets)
+        await store.save(agent)
         print(f"Created agent: {agent.id}\n")
 
         # Chat loop
@@ -61,17 +61,17 @@ async def main():
                 break
 
             # Advance the agent
-            agent, assets = await immagent.advance(db, agent, user_input)
-            await db.save(*assets)
+            agent = await store.advance(agent, user_input)
+            await store.save(agent)
 
             # Get the last message (assistant's response)
-            messages = await immagent.get_messages(db, agent)
+            messages = await store.get_messages(agent)
             if messages:
                 last_message = messages[-1]
                 print(f"Assistant: {last_message.content}\n")
 
         # Show lineage
-        lineage = await immagent.get_lineage(db, agent)
+        lineage = await store.get_lineage(agent)
         print(f"\nAgent went through {len(lineage)} states")
 
 

@@ -22,36 +22,36 @@ async def main():
         "postgresql://postgres:postgres@localhost:5432/postgres",
     )
 
-    async with await immagent.Database.connect(db_url) as db:
-        await db.init_schema()
+    async with await immagent.Store.connect(db_url) as store:
+        await store.init_schema()
 
         # Create agent
-        agent, assets = immagent.create_agent(
+        agent = store.create_agent(
             name="Calculator",
             system_prompt="You are a calculator. Only respond with numbers.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await db.save(*assets)
+        await store.save(agent)
         print(f"Agent v1: {agent.id}")
 
         # First turn
-        agent, assets = await immagent.advance(db, agent, "What is 2 + 2?")
-        await db.save(*assets)
+        agent = await store.advance(agent, "What is 2 + 2?")
+        await store.save(agent)
         print(f"Agent v2: {agent.id}")
 
         # Second turn
-        agent, assets = await immagent.advance(db, agent, "Multiply that by 10")
-        await db.save(*assets)
+        agent = await store.advance(agent, "Multiply that by 10")
+        await store.save(agent)
         print(f"Agent v3: {agent.id}")
 
         # Show conversation
         print("\nConversation:")
-        for msg in await immagent.get_messages(db, agent):
+        for msg in await store.get_messages(agent):
             print(f"  {msg.role}: {msg.content}")
 
         # Show lineage
         print("\nLineage:")
-        for a in await immagent.get_lineage(db, agent):
+        for a in await store.get_lineage(agent):
             print(f"  {a.id} (parent: {a.parent_id})")
 
 

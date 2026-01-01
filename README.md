@@ -2,31 +2,59 @@
 
 An immutable agent architecture for Python. Every state transition creates a new agent with a fresh UUID—the old agent remains unchanged.
 
+## Quick Start
+
+```python
+import asyncio
+import immagent
+
+async def main():
+    async with await immagent.Store.connect("postgresql://...") as store:
+        await store.init_schema()
+
+        # Create an agent
+        agent = store.create_agent(
+            name="Assistant",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        # Advance returns a NEW agent with a new ID
+        agent = await store.advance(agent, "Hello!")
+        await store.save(agent)
+
+        # Get messages
+        for msg in await store.get_messages(agent):
+            print(f"{msg.role}: {msg.content}")
+
+asyncio.run(main())
+```
+
 ## Public API
 
-| Function | Description |
-|----------|-------------|
-| `immagent.create_agent()` | Create a new agent |
-| `immagent.advance()`      | Call LLM and advance state |
-| `immagent.load_agent()`   | Load agent from cache/database |
-| `immagent.get_messages()` | Get conversation messages |
-| `immagent.get_lineage()`  | Walk agent's parent chain |
-| `immagent.clear_cache()`  | Clear the in-memory cache |
-| `immagent.Model`          | Enum of common LLM models |
-| `immagent.Database`       | PostgreSQL connection with pooling |
-| `Database.save()`         | Persist assets to database |
-| `immagent.MCPManager`     | MCP tool server manager |
+| Method | Description |
+|--------|-------------|
+| `Store.connect(dsn)` | Connect to PostgreSQL |
+| `store.init_schema()` | Create tables if not exist |
+| `store.create_agent()` | Create a new agent |
+| `store.advance(agent, input)` | Call LLM and return new agent |
+| `store.save(agent)` | Persist agent and dependencies |
+| `store.load_agent(id)` | Load agent by UUID |
+| `store.get_messages(agent)` | Get conversation messages |
+| `store.get_lineage(agent)` | Walk agent's parent chain |
+| `store.clear_cache()` | Clear in-memory cache |
+| `immagent.Model` | Enum of common LLM models |
+| `immagent.MCPManager` | MCP tool server manager |
 
 ## Core Concept
 
 ```python
-import immagent
-
 # Every advance returns a NEW agent with a new ID
-new_agent, assets = await immagent.advance(db, agent, "Hello!")
-await db.save(*assets)  # Persist explicitly
+new_agent = await store.advance(agent, "Hello!")
+await store.save(new_agent)
 
 assert new_agent.id != agent.id  # Different UUIDs
+assert new_agent.parent_id == agent.id  # Linked
 ```
 
 Because everything is immutable:
@@ -48,36 +76,30 @@ cd immagent-py
 uv sync --all-extras
 ```
 
-## Quick Start
+## Architecture
+
+### Store
+
+The `Store` is the main interface. It combines:
+- **Database** — PostgreSQL persistence
+- **Cache** — Thread-safe LRU cache (10,000 entries)
 
 ```python
-import asyncio
-
-import immagent
-
-async def main():
-    # Connect to PostgreSQL (auto-closes with context manager)
-    async with await immagent.Database.connect("postgresql://user:pass@localhost/immagent") as db:
-        await db.init_schema()
-
-        # Create an agent
-        agent, assets = immagent.create_agent(
-            name="Assistant",
-            system_prompt="You are a helpful assistant.",
-            model=immagent.Model.CLAUDE_3_5_HAIKU,
-        )
-        await db.save(*assets)
-        print(f"Created agent: {agent.id}")
-
-        # Advance the agent — returns a NEW agent
-        agent, assets = await immagent.advance(db, agent, "What is 2 + 2?")
-        await db.save(*assets)
-        print(f"New agent: {agent.id}")
-
-asyncio.run(main())
+async with await immagent.Store.connect("postgresql://...") as store:
+    await store.init_schema()
+    # ... use store ...
 ```
 
-## Architecture
+Connection pool configuration:
+
+```python
+store = await immagent.Store.connect(
+    "postgresql://...",
+    min_size=2,                          # Min pool connections (default: 2)
+    max_size=10,                         # Max pool connections (default: 10)
+    max_inactive_connection_lifetime=300, # Idle timeout in seconds (default: 300)
+)
+```
 
 ### Assets
 
@@ -110,7 +132,7 @@ class ImmAgent(Asset):
 
 ### Advancing
 
-`advance()` is the main entry point:
+`store.advance()` is the main entry point:
 
 1. Load conversation history and system prompt
 2. Add the user message
@@ -118,23 +140,18 @@ class ImmAgent(Asset):
 4. If tool calls requested, execute via MCP and loop
 5. Create new `Conversation` with all messages
 6. Create new `ImmAgent` with `parent_id` pointing to the old agent
-7. Return the new agent and all new assets
+7. Cache the new assets
+8. Return the new agent
 
 ```python
-import immagent
-
-agent_v2, assets = await immagent.advance(db, agent_v1, "Hello")
-await db.save(*assets)  # Persist explicitly
-
-# agent_v1 unchanged, agent_v2 is the new state
-# agent_v2.parent_id == agent_v1.id
+new_agent = await store.advance(agent, "Hello")
+await store.save(new_agent)  # Persist when ready
 ```
 
 Configuration options:
 
 ```python
-agent, assets = await immagent.advance(
-    db,
+agent = await store.advance(
     agent,
     "Hello",
     max_retries=3,      # Retry on transient failures (default: 3)
@@ -143,42 +160,13 @@ agent, assets = await immagent.advance(
 )
 ```
 
-### Database
+### Saving
 
-PostgreSQL with separate tables per asset type:
-
-- `text_assets` — system prompts
-- `messages` — conversation messages
-- `conversations` — ordered message ID lists
-- `agents` — agent states
+`store.save(agent)` persists the agent and its dependencies (system prompt, conversation, messages) atomically in a single transaction.
 
 ```python
-import immagent
-
-db = await immagent.Database.connect("postgresql://...")
-await db.init_schema()  # Creates tables if not exist
-```
-
-Connection pool configuration:
-
-```python
-db = await immagent.Database.connect(
-    "postgresql://...",
-    min_size=2,                          # Min pool connections (default: 2)
-    max_size=10,                         # Max pool connections (default: 10)
-    max_inactive_connection_lifetime=300, # Idle timeout in seconds (default: 300)
-)
-```
-
-### Loading
-
-Load an agent by ID to resume a conversation:
-
-```python
-import immagent
-
-# First call loads from DB, subsequent calls return cached
-agent = await immagent.load_agent(db, agent_id)
+agent = store.create_agent(...)  # Cached, not persisted
+await store.save(agent)          # Now in database
 ```
 
 ## LLM Providers
@@ -186,8 +174,6 @@ agent = await immagent.load_agent(db, agent_id)
 Uses [LiteLLM](https://docs.litellm.ai/) for multi-provider support. Use the `Model` enum for common models:
 
 ```python
-import immagent
-
 # Anthropic
 immagent.Model.CLAUDE_3_5_HAIKU
 immagent.Model.CLAUDE_SONNET_4
@@ -218,9 +204,6 @@ export OPENAI_API_KEY=sk-...
 Agents can use tools via [Model Context Protocol](https://modelcontextprotocol.io/):
 
 ```python
-import immagent
-
-# Use as async context manager for automatic cleanup
 async with immagent.MCPManager() as mcp:
     await mcp.connect(
         "filesystem",
@@ -228,18 +211,8 @@ async with immagent.MCPManager() as mcp:
         args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
     )
 
-    # Advance with tools available
-    agent, assets = await immagent.advance(db, agent, "List files in /tmp", mcp=mcp)
-    await db.save(*assets)
-```
-
-Or manage the lifecycle manually:
-
-```python
-mcp = immagent.MCPManager()
-await mcp.connect("filesystem", command="npx", args=[...])
-# ... use mcp ...
-await mcp.close()
+    agent = await store.advance(agent, "List files in /tmp", mcp=mcp)
+    await store.save(agent)
 ```
 
 The agent will automatically discover and use available tools.
@@ -280,10 +253,8 @@ async def main():
 Custom exceptions for precise error handling:
 
 ```python
-import immagent
-
 try:
-    agent, assets = await immagent.advance(db, agent, "Hello")
+    agent = await store.advance(agent, "Hello")
 except immagent.ConversationNotFoundError as e:
     print(f"Conversation {e.asset_id} not found")
 except immagent.SystemPromptNotFoundError as e:
@@ -298,8 +269,6 @@ Exception hierarchy:
     - `ConversationNotFoundError`
     - `SystemPromptNotFoundError`
     - `AgentNotFoundError`
-  - `LLMError` — LLM call failed
-  - `ToolExecutionError` — MCP tool execution failed
 
 ## Logging
 
@@ -380,11 +349,9 @@ make test
 ```
 src/immagent/
 ├── __init__.py     # Public API exports
-├── api.py          # advance(), create_agent(), load_agent()
+├── store.py        # Store (main interface - cache + db)
 ├── agent.py        # ImmAgent dataclass
 ├── assets.py       # Asset base class, TextAsset
-├── cache.py        # In-memory UUID→Asset cache
-├── db.py           # PostgreSQL persistence with connection pooling
 ├── exceptions.py   # Custom exception types
 ├── llm.py          # LiteLLM wrapper with retries/timeout
 ├── logging.py      # Logging configuration

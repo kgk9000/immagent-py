@@ -5,7 +5,6 @@ creates a new agent with a fresh UUID4.
 """
 
 from immagent.agent import ImmAgent
-from immagent.db import Database
 from immagent.exceptions import (
     AgentNotFoundError,
     AssetNotFoundError,
@@ -16,21 +15,14 @@ from immagent.exceptions import (
 from immagent.llm import Model
 from immagent.mcp import MCPManager
 from immagent.messages import Message
-from immagent.api import (
-    advance,
-    create_agent,
-    get_lineage,
-    get_messages,
-    load_agent,
-)
-from immagent.cache import clear_cache
+from immagent.store import Store
 
 __all__ = [
     # Core types
     "ImmAgent",
     "Message",
-    # Database
-    "Database",
+    # Store (main interface)
+    "Store",
     # MCP
     "MCPManager",
     # Models
@@ -41,11 +33,4 @@ __all__ = [
     "ConversationNotFoundError",
     "SystemPromptNotFoundError",
     "AgentNotFoundError",
-    # Functions
-    "advance",
-    "clear_cache",
-    "create_agent",
-    "get_lineage",
-    "get_messages",
-    "load_agent",
 ]
