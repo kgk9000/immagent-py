@@ -10,6 +10,7 @@ import immagent.exceptions as exc
 import immagent.llm as llm
 import immagent.mcp as mcp_mod
 import immagent.messages as messages
+from immagent.logging import logger
 
 
 async def advance(
@@ -45,6 +46,13 @@ async def advance(
         A tuple of (new_agent, assets) where assets is a list of all new
         assets created during this turn (messages, conversation, agent).
     """
+    logger.info(
+        "Advancing agent: id=%s, name=%s, model=%s",
+        agent.id,
+        agent.name,
+        agent.model,
+    )
+
     # Load existing conversation and system prompt
     conversation = await cache.get_conversation(db, agent.conversation_id)
     if conversation is None:
@@ -56,6 +64,7 @@ async def advance(
 
     # Load existing messages
     msgs = await cache.get_messages(db, conversation.message_ids)
+    logger.debug("Loaded %d existing messages", len(msgs))
 
     # Create user message
     user_message = messages.Message.user(user_input)
@@ -68,7 +77,8 @@ async def advance(
     new_messages: list[messages.Message] = [user_message]
 
     # Tool loop
-    for _ in range(max_tool_rounds):
+    tool_round = 0
+    for tool_round in range(max_tool_rounds):
         # Call LLM (with retries for transient failures)
         assistant_message = await llm.complete(
             model=agent.model,
@@ -103,6 +113,14 @@ async def advance(
 
     # Cache the new assets
     cache.cache_all(*new_assets)
+
+    logger.info(
+        "Agent advanced: old_id=%s, new_id=%s, tool_rounds=%d, new_messages=%d",
+        agent.id,
+        new_agent.id,
+        tool_round + 1,
+        len(new_messages),
+    )
 
     return new_agent, new_assets
 

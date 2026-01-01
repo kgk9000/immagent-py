@@ -1,5 +1,9 @@
 """Tests for MCP integration."""
 
+import os
+import sys
+from pathlib import Path
+
 import pytest
 
 from immagent.mcp import MCPManager, tool_to_openai_format
@@ -74,16 +78,39 @@ class TestMCPManager:
         assert "unknown_tool" in result
 
 
-# Integration tests for MCP would require actual MCP servers
-# These are marked as skip by default
-@pytest.mark.skip(reason="Requires MCP server (npx)")
+# Check if weather token is available for integration tests
+WEATHER_TOKEN = os.environ.get("WEATHER_TOKEN")
+
+
+@pytest.mark.skipif(not WEATHER_TOKEN, reason="WEATHER_TOKEN not set")
 class TestMCPIntegration:
-    async def test_connect_to_echo_server(self):
-        """Can connect to an MCP server and list tools."""
-        # This would require an actual MCP server like the echo server
-        # manager = MCPManager()
-        # await manager.connect("echo", "npx", ["-y", "@modelcontextprotocol/server-echo"])
-        # tools = manager.get_all_tools()
-        # assert len(tools) > 0
-        # await manager.close()
-        pass
+    """Integration tests using the weather MCP server."""
+
+    async def test_connect_and_list_tools(self):
+        """Can connect to weather server and list tools."""
+        async with MCPManager() as manager:
+            await manager.connect(
+                "weather",
+                sys.executable,
+                [str(Path(__file__).parent / "weather_server.py")],
+                env={**os.environ, "WEATHER_TOKEN": WEATHER_TOKEN},
+            )
+
+            tools = manager.get_all_tools()
+            assert len(tools) == 1
+            assert tools[0]["function"]["name"] == "get_weather"
+
+    async def test_execute_weather_tool(self):
+        """Can execute weather tool and get result."""
+        async with MCPManager() as manager:
+            await manager.connect(
+                "weather",
+                sys.executable,
+                [str(Path(__file__).parent / "weather_server.py")],
+                env={**os.environ, "WEATHER_TOKEN": WEATHER_TOKEN},
+            )
+
+            result = await manager.execute("get_weather", '{"city": "London"}')
+
+            assert "London" in result
+            assert "Temperature" in result or "Error" not in result

@@ -1,11 +1,14 @@
 """MCP (Model Context Protocol) client integration for tool calling."""
 
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+from immagent.logging import logger
 
 
 @asynccontextmanager
@@ -165,6 +168,13 @@ class MCPManager:
             tool_def = tool_to_openai_format(tool.model_dump())
             self._tools[tool.name] = (server_key, tool_def)
 
+        logger.debug(
+            "MCP connected: server=%s, tools=%d (%s)",
+            server_key,
+            len(result.tools),
+            [t.name for t in result.tools],
+        )
+
     def get_all_tools(self) -> list[dict[str, Any]]:
         """Get all available tools across all connected servers."""
         return [tool_def for _, tool_def in self._tools.values()]
@@ -180,13 +190,28 @@ class MCPManager:
             Tool result as a string
         """
         if tool_name not in self._tools:
+            logger.warning("MCP unknown tool: %s", tool_name)
             return f"Error: Unknown tool '{tool_name}'"
 
         server_key, _ = self._tools[tool_name]
         conn = self._connections[server_key]
 
         args_dict = json.loads(arguments) if arguments else {}
-        return await execute_tool(conn.session, tool_name, args_dict)
+
+        logger.debug("MCP execute: tool=%s, server=%s", tool_name, server_key)
+        start_time = time.perf_counter()
+
+        result = await execute_tool(conn.session, tool_name, args_dict)
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.debug(
+            "MCP result: tool=%s, elapsed=%.0fms, result_len=%d",
+            tool_name,
+            elapsed_ms,
+            len(result),
+        )
+
+        return result
 
     async def close(self) -> None:
         """Close all MCP sessions and their underlying connections."""

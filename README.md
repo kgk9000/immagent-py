@@ -14,6 +14,8 @@ An immutable agent architecture for Python. Every state transition creates a new
 | `immagent.get_lineage()`  | Walk agent's parent chain |
 | `immagent.clear_cache()`  | Clear the in-memory cache |
 | `immagent.Model`          | Enum of common LLM models |
+| `immagent.Database`       | PostgreSQL connection with pooling |
+| `immagent.MCPManager`     | MCP tool server manager |
 
 ## Core Concept
 
@@ -128,6 +130,19 @@ await immagent.save(db, *assets)  # Persist explicitly
 # agent_v2.parent_id == agent_v1.id
 ```
 
+Configuration options:
+
+```python
+agent, assets = await immagent.advance(
+    agent,
+    "Hello",
+    db,
+    max_retries=3,      # Retry on transient failures (default: 3)
+    timeout=120.0,      # Request timeout in seconds (default: 120)
+    max_tool_rounds=10, # Max tool-use loops (default: 10)
+)
+```
+
 ### Database
 
 PostgreSQL with separate tables per asset type:
@@ -142,6 +157,17 @@ import immagent
 
 db = await immagent.Database.connect("postgresql://...")
 await db.init_schema()  # Creates tables if not exist
+```
+
+Connection pool configuration:
+
+```python
+db = await immagent.Database.connect(
+    "postgresql://...",
+    min_size=2,                          # Min pool connections (default: 2)
+    max_size=10,                         # Max pool connections (default: 10)
+    max_inactive_connection_lifetime=300, # Idle timeout in seconds (default: 300)
+)
 ```
 
 ### Loading
@@ -194,22 +220,78 @@ Agents can use tools via [Model Context Protocol](https://modelcontextprotocol.i
 ```python
 import immagent
 
-# Connect to MCP servers
+# Use as async context manager for automatic cleanup
+async with immagent.MCPManager() as mcp:
+    await mcp.connect(
+        "filesystem",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    )
+
+    # Advance with tools available
+    agent, assets = await immagent.advance(agent, "List files in /tmp", db, mcp=mcp)
+    await immagent.save(db, *assets)
+```
+
+Or manage the lifecycle manually:
+
+```python
 mcp = immagent.MCPManager()
-await mcp.connect(
-    "filesystem",
-    command="npx",
-    args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-)
-
-# Advance with tools available
-agent, assets = await immagent.advance(agent, "List files in /tmp", db, mcp=mcp)
-await immagent.save(db, *assets)
-
+await mcp.connect("filesystem", command="npx", args=[...])
+# ... use mcp ...
 await mcp.close()
 ```
 
 The agent will automatically discover and use available tools.
+
+## Error Handling
+
+Custom exceptions for precise error handling:
+
+```python
+import immagent
+
+try:
+    agent, assets = await immagent.advance(agent, "Hello", db)
+except immagent.ConversationNotFoundError as e:
+    print(f"Conversation {e.asset_id} not found")
+except immagent.SystemPromptNotFoundError as e:
+    print(f"System prompt {e.asset_id} not found")
+except immagent.ImmAgentError as e:
+    print(f"Agent error: {e}")
+```
+
+Exception hierarchy:
+- `ImmAgentError` — base exception
+  - `AssetNotFoundError` — asset lookup failed
+    - `ConversationNotFoundError`
+    - `SystemPromptNotFoundError`
+    - `AgentNotFoundError`
+  - `LLMError` — LLM call failed
+  - `ToolExecutionError` — MCP tool execution failed
+
+## Logging
+
+Enable logging for debugging and observability:
+
+```python
+import logging
+
+# Enable debug logging for immagent
+logging.basicConfig(level=logging.DEBUG)
+
+# Or configure specifically
+immagent_logger = logging.getLogger("immagent")
+immagent_logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(name)s - %(levelname)s - %(message)s"))
+immagent_logger.addHandler(handler)
+```
+
+Log output includes:
+- LLM requests/responses with timing and token usage
+- MCP tool connections and executions
+- Agent state transitions
 
 ## Development
 
@@ -266,13 +348,15 @@ make test
 
 ```
 src/immagent/
-├── __init__.py     # Public API
-├── assets.py       # Asset base class, TextAsset
+├── __init__.py     # Public API exports
+├── api.py          # advance(), create_agent(), save(), load_agent()
 ├── agent.py        # ImmAgent dataclass
-├── messages.py     # Message, ToolCall, Conversation
-├── db.py           # PostgreSQL persistence
+├── assets.py       # Asset base class, TextAsset
 ├── cache.py        # In-memory UUID→Asset cache
-├── llm.py          # LiteLLM wrapper
+├── db.py           # PostgreSQL persistence with connection pooling
+├── exceptions.py   # Custom exception types
+├── llm.py          # LiteLLM wrapper with retries/timeout
+├── logging.py      # Logging configuration
 ├── mcp.py          # MCP client for tools
-└── api.py          # advance(), create_agent(), save(), load_agent()
+└── messages.py     # Message, ToolCall, Conversation
 ```

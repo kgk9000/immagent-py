@@ -1,11 +1,13 @@
 """LLM integration via LiteLLM."""
 
+import time
 from enum import Enum
 from typing import Any
 
 import litellm
 
 import immagent.messages as messages
+from immagent.logging import logger
 
 
 class Model(str, Enum):
@@ -65,8 +67,26 @@ async def complete(
         kwargs["timeout"] = timeout
 
     # Call LiteLLM (handles retries with exponential backoff internally)
+    logger.debug(
+        "LLM request: model=%s, messages=%d, tools=%d",
+        model,
+        len(litellm_messages),
+        len(tools) if tools else 0,
+    )
+    start_time = time.perf_counter()
+
     response = await litellm.acompletion(**kwargs)
     choice = response.choices[0].message  # type: ignore[union-attr]
+
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    usage = getattr(response, "usage", None)
+    logger.debug(
+        "LLM response: model=%s, elapsed=%.0fms, input_tokens=%s, output_tokens=%s",
+        model,
+        elapsed_ms,
+        getattr(usage, "prompt_tokens", "?") if usage else "?",
+        getattr(usage, "completion_tokens", "?") if usage else "?",
+    )
 
     # Parse tool calls if present
     tool_calls: tuple[messages.ToolCall, ...] | None = None
@@ -79,6 +99,7 @@ async def complete(
             )
             for tc in choice.tool_calls
         )
+        logger.debug("LLM requested %d tool call(s): %s", len(tool_calls), [tc.name for tc in tool_calls])
 
     return messages.Message.assistant(
         content=choice.content,

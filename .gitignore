@@ -1,6 +1,7 @@
 *~
 .claude/
 .env
+.weather.env
 .pytest_cache/
 .ruff_cache/
 .venv/

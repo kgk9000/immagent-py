@@ -39,11 +39,11 @@ check: lint typecheck ## Run all checks (lint + type check)
 
 .PHONY: test
 test: ## Run tests
-	@bash -c 'test -f .env && source .env; uv run pytest tests/ -v'
+	@bash -c 'set -a; test -f .env && source .env; test -f .weather.env && source .weather.env; set +a; uv run pytest tests/ -v'
 
 .PHONY: test-cov
 test-cov: ## Run tests with coverage
-	@bash -c 'test -f .env && source .env; uv run pytest tests/ -v --cov=immagent --cov-report=term-missing'
+	@bash -c 'set -a; test -f .env && source .env; test -f .weather.env && source .weather.env; set +a; uv run pytest tests/ -v --cov=immagent --cov-report=term-missing'
 
 .PHONY: clean
 clean: ## Remove build artifacts and caches
