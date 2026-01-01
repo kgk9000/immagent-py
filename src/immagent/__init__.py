@@ -7,6 +7,15 @@ creates a new agent with a fresh UUID4.
 from immagent.agent import ImmAgent
 from immagent.assets import Asset, TextAsset
 from immagent.db import Database
+from immagent.exceptions import (
+    AgentNotFoundError,
+    AssetNotFoundError,
+    ConversationNotFoundError,
+    ImmAgentError,
+    LLMError,
+    SystemPromptNotFoundError,
+    ToolExecutionError,
+)
 from immagent.llm import Model
 from immagent.mcp import MCPManager
 from immagent.messages import Conversation, Message, ToolCall
@@ -34,6 +43,14 @@ __all__ = [
     "MCPManager",
     # Models
     "Model",
+    # Exceptions
+    "ImmAgentError",
+    "AssetNotFoundError",
+    "ConversationNotFoundError",
+    "SystemPromptNotFoundError",
+    "AgentNotFoundError",
+    "LLMError",
+    "ToolExecutionError",
     # Functions
     "advance",
     "clear_cache",

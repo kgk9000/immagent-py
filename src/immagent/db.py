@@ -52,15 +52,46 @@ CREATE INDEX IF NOT EXISTS idx_agents_conversation_id ON agents(conversation_id)
 
 
 class Database:
-    """Async PostgreSQL database connection for asset persistence."""
+    """Async PostgreSQL database connection with connection pooling.
+
+    Use as an async context manager for automatic cleanup:
+
+        async with await Database.connect("postgresql://...") as db:
+            await db.init_schema()
+            # ... use db ...
+    """
 
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
 
     @classmethod
-    async def connect(cls, dsn: str) -> "Database":
-        """Connect to PostgreSQL and return a Database instance."""
-        pool = await asyncpg.create_pool(dsn)
+    async def connect(
+        cls,
+        dsn: str,
+        min_size: int = 2,
+        max_size: int = 10,
+        max_inactive_connection_lifetime: float = 300.0,
+    ) -> "Database":
+        """Connect to PostgreSQL and return a Database instance.
+
+        Args:
+            dsn: PostgreSQL connection string
+            min_size: Minimum number of connections in the pool (default: 2)
+            max_size: Maximum number of connections in the pool (default: 10)
+            max_inactive_connection_lifetime: Seconds before idle connections
+                are closed (default: 300)
+
+        Returns:
+            A Database instance with an active connection pool
+        """
+        pool = await asyncpg.create_pool(
+            dsn,
+            min_size=min_size,
+            max_size=max_size,
+            max_inactive_connection_lifetime=max_inactive_connection_lifetime,
+        )
+        if pool is None:
+            raise RuntimeError("Failed to create database connection pool")
         return cls(pool)
 
     async def close(self) -> None:

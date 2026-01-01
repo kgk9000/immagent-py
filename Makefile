@@ -10,6 +10,14 @@ install: ## Install dependencies
 dev: ## Install with dev dependencies
 	uv sync --all-extras
 
+.PHONY: install-hooks
+install-hooks: ## Install pre-commit hooks
+	uv run pre-commit install
+
+.PHONY: pre-commit
+pre-commit: ## Run pre-commit on all files
+	uv run pre-commit run --all-files
+
 .PHONY: fmt
 fmt: ## Format code with ruff
 	uv run ruff format src/ tests/

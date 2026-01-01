@@ -84,14 +84,47 @@ async def execute_tool(
     return ""
 
 
+class _ServerConnection:
+    """Internal class to track a server's context managers."""
+
+    def __init__(self, stdio_cm: Any, session: ClientSession):
+        self.stdio_cm = stdio_cm
+        self.session = session
+
+
 class MCPManager:
-    """Manages connections to multiple MCP servers."""
+    """Manages connections to multiple MCP servers.
+
+    Use as an async context manager for proper resource cleanup:
+
+        async with MCPManager() as mcp:
+            await mcp.connect("server", "command", ["args"])
+            tools = mcp.get_all_tools()
+
+    Or manually manage lifecycle:
+
+        mcp = MCPManager()
+        await mcp.connect("server", "command", ["args"])
+        # ... use mcp ...
+        await mcp.close()
+    """
 
     def __init__(self):
-        self._sessions: dict[str, ClientSession] = {}
+        self._connections: dict[str, _ServerConnection] = {}
         self._tools: dict[
             str, tuple[str, dict[str, Any]]
         ] = {}  # tool_name -> (server_key, tool_def)
+
+    async def __aenter__(self) -> "MCPManager":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        await self.close()
 
     async def connect(
         self,
@@ -114,15 +147,17 @@ class MCPManager:
             env=env,
         )
 
-        # Note: For proper resource management, this should be used with
-        # an async context manager. This simplified version assumes
-        # the caller will handle cleanup.
-        read, write = await stdio_client(server_params).__aenter__()
+        # Create and enter the stdio context manager
+        stdio_cm = stdio_client(server_params)
+        read, write = await stdio_cm.__aenter__()
+
+        # Create and enter the session context manager
         session = ClientSession(read, write)
         await session.__aenter__()
         await session.initialize()
 
-        self._sessions[server_key] = session
+        # Store both for proper cleanup
+        self._connections[server_key] = _ServerConnection(stdio_cm, session)
 
         # Discover and index tools
         result = await session.list_tools()
@@ -148,14 +183,16 @@ class MCPManager:
             return f"Error: Unknown tool '{tool_name}'"
 
         server_key, _ = self._tools[tool_name]
-        session = self._sessions[server_key]
+        conn = self._connections[server_key]
 
         args_dict = json.loads(arguments) if arguments else {}
-        return await execute_tool(session, tool_name, args_dict)
+        return await execute_tool(conn.session, tool_name, args_dict)
 
     async def close(self) -> None:
-        """Close all MCP sessions."""
-        for session in self._sessions.values():
-            await session.__aexit__(None, None, None)
-        self._sessions.clear()
+        """Close all MCP sessions and their underlying connections."""
+        for conn in self._connections.values():
+            # Exit session first, then stdio
+            await conn.session.__aexit__(None, None, None)
+            await conn.stdio_cm.__aexit__(None, None, None)
+        self._connections.clear()
         self._tools.clear()

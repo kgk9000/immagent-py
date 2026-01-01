@@ -32,6 +32,7 @@ async def complete(
     system: str,
     tools: list[dict[str, Any]] | None = None,
     max_retries: int = 3,
+    timeout: float | None = 120.0,
 ) -> messages.Message:
     """Call an LLM via LiteLLM and return the response as a Message.
 
@@ -43,6 +44,7 @@ async def complete(
         system: System prompt content
         tools: Optional list of tools in OpenAI function format
         max_retries: Number of retry attempts for transient failures (default: 3)
+        timeout: Request timeout in seconds (default: 120). None for no timeout.
 
     Returns:
         An assistant Message with the response
@@ -59,6 +61,8 @@ async def complete(
     }
     if tools:
         kwargs["tools"] = tools
+    if timeout is not None:
+        kwargs["timeout"] = timeout
 
     # Call LiteLLM (handles retries with exponential backoff internally)
     response = await litellm.acompletion(**kwargs)

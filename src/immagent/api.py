@@ -6,6 +6,7 @@ import immagent.agent as agent_mod
 import immagent.assets as assets
 import immagent.cache as cache
 import immagent.db as db_mod
+import immagent.exceptions as exc
 import immagent.llm as llm
 import immagent.mcp as mcp_mod
 import immagent.messages as messages
@@ -18,6 +19,7 @@ async def advance(
     mcp: mcp_mod.MCPManager | None = None,
     max_tool_rounds: int = 10,
     max_retries: int = 3,
+    timeout: float | None = 120.0,
 ) -> tuple[agent_mod.ImmAgent, list[assets.Asset]]:
     """Advance the agent with a user message.
 
@@ -37,6 +39,7 @@ async def advance(
         mcp: Optional MCP manager for tool calling
         max_tool_rounds: Maximum number of tool-use rounds (safety limit)
         max_retries: Number of retry attempts for LLM calls (default: 3)
+        timeout: LLM request timeout in seconds (default: 120). None for no timeout.
 
     Returns:
         A tuple of (new_agent, assets) where assets is a list of all new
@@ -45,11 +48,11 @@ async def advance(
     # Load existing conversation and system prompt
     conversation = await cache.get_conversation(db, agent.conversation_id)
     if conversation is None:
-        raise ValueError(f"Conversation {agent.conversation_id} not found")
+        raise exc.ConversationNotFoundError(agent.conversation_id)
 
     system_prompt = await cache.get_text_asset(db, agent.system_prompt_id)
     if system_prompt is None:
-        raise ValueError(f"System prompt {agent.system_prompt_id} not found")
+        raise exc.SystemPromptNotFoundError(agent.system_prompt_id)
 
     # Load existing messages
     msgs = await cache.get_messages(db, conversation.message_ids)
@@ -73,6 +76,7 @@ async def advance(
             system=system_prompt.content,
             tools=tools,
             max_retries=max_retries,
+            timeout=timeout,
         )
         msgs.append(assistant_message)
         new_messages.append(assistant_message)
