@@ -3,7 +3,8 @@
 import immagent.cache as cache
 import immagent.db as db_mod
 import immagent.messages as messages
-from immagent import ImmAgent, TextAsset
+from immagent.agent import ImmAgent
+from immagent.assets import TextAsset
 
 
 class TestTextAsset:
@@ -130,7 +131,7 @@ class TestImmAgent:
         assert loaded.parent_id is None
 
     async def test_evolve_creates_new_agent(self, db: db_mod.Database):
-        """_evolve creates a new agent with parent link."""
+        """evolve creates a new agent with parent link."""
         prompt = TextAsset.create("You are helpful.")
         await db.save_text_asset(prompt)
 
@@ -148,7 +149,7 @@ class TestImmAgent:
         conv2 = conv1.with_messages(msg.id)
         await db.save_conversation(conv2)
 
-        agent2 = agent1._evolve(conv2)
+        agent2 = agent1.evolve(conv2)
         await db.save_agent(agent2)
 
         assert agent2.id != agent1.id

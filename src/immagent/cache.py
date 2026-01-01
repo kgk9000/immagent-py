@@ -2,38 +2,48 @@
 
 Since assets are immutable, caching is safe and efficient.
 Once an asset is loaded, it never changes.
+
+Uses a thread-safe LRU cache with a configurable max size.
 """
 
+import threading
 from uuid import UUID
+
+from cachetools import LRUCache
 
 import immagent.agent as agent_mod
 import immagent.assets as assets
 import immagent.db as db_mod
 import immagent.messages as messages
 
-# Global cache - safe because assets are immutable
-_cache: dict[UUID, assets.Asset] = {}
+# Thread-safe LRU cache with 10,000 entry limit
+_cache: LRUCache[UUID, assets.Asset] = LRUCache(maxsize=10_000)
+_lock = threading.RLock()
 
 
 def get_cached(asset_id: UUID) -> assets.Asset | None:
     """Get an asset from cache if present."""
-    return _cache.get(asset_id)
+    with _lock:
+        return _cache.get(asset_id)
 
 
 def cache(asset: assets.Asset) -> None:
     """Add an asset to the cache."""
-    _cache[asset.id] = asset
+    with _lock:
+        _cache[asset.id] = asset
 
 
 def cache_all(*assets_to_cache: assets.Asset) -> None:
     """Add multiple assets to the cache."""
-    for asset in assets_to_cache:
-        _cache[asset.id] = asset
+    with _lock:
+        for asset in assets_to_cache:
+            _cache[asset.id] = asset
 
 
 def clear_cache() -> None:
     """Clear the entire cache. Useful for testing."""
-    _cache.clear()
+    with _lock:
+        _cache.clear()
 
 
 async def get_text_asset(db: db_mod.Database, asset_id: UUID) -> assets.TextAsset | None:
@@ -62,14 +72,17 @@ async def get_message(db: db_mod.Database, message_id: UUID) -> messages.Message
 
 async def get_messages(db: db_mod.Database, message_ids: tuple[UUID, ...]) -> list[messages.Message]:
     """Get multiple Messages, using cache where possible."""
-    result: list[messages.Message] = []
+    if not message_ids:
+        return []
+
+    msgs_by_id: dict[UUID, messages.Message] = {}
     to_load: list[UUID] = []
 
     # Check cache first
     for mid in message_ids:
         cached = get_cached(mid)
         if cached is not None and isinstance(cached, messages.Message):
-            result.append(cached)
+            msgs_by_id[mid] = cached
         else:
             to_load.append(mid)
 
@@ -78,12 +91,9 @@ async def get_messages(db: db_mod.Database, message_ids: tuple[UUID, ...]) -> li
         loaded = await db.load_messages(tuple(to_load))
         for msg in loaded:
             cache(msg)
+            msgs_by_id[msg.id] = msg
 
-    # Rebuild in correct order
-    msgs_by_id = {m.id: m for m in result}
-    for msg in await db.load_messages(tuple(to_load)):
-        msgs_by_id[msg.id] = msg
-
+    # Return in original order
     return [msgs_by_id[mid] for mid in message_ids if mid in msgs_by_id]
 
 

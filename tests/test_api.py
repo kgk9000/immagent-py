@@ -2,6 +2,7 @@
 
 import immagent
 import immagent.db as db_mod
+from immagent.messages import Conversation
 
 
 class TestCreateAgent:
@@ -46,7 +47,7 @@ class TestSaveAndLoad:
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        await immagent.save(db, *assets)
+        await db.save(*assets)
         loaded = await immagent.load_agent(db, agent.id)
 
         assert loaded is not None
@@ -54,12 +55,13 @@ class TestSaveAndLoad:
         assert loaded.name == "TestBot"
 
     async def test_load_nonexistent_agent(self, db: db_mod.Database):
-        """Loading nonexistent agent returns None."""
+        """Loading nonexistent agent raises AgentNotFoundError."""
         import uuid
 
-        loaded = await immagent.load_agent(db, uuid.uuid4())
+        import pytest
 
-        assert loaded is None
+        with pytest.raises(immagent.AgentNotFoundError):
+            await immagent.load_agent(db, uuid.uuid4())
 
 
 class TestGetMessages:
@@ -70,9 +72,9 @@ class TestGetMessages:
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await immagent.save(db, *assets)
+        await db.save(*assets)
 
-        messages = await immagent.get_messages(agent, db)
+        messages = await immagent.get_messages(db, agent)
 
         assert messages == []
 
@@ -85,9 +87,9 @@ class TestGetLineage:
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await immagent.save(db, *assets)
+        await db.save(*assets)
 
-        lineage = await immagent.get_lineage(agent, db)
+        lineage = await immagent.get_lineage(db, agent)
 
         assert len(lineage) == 1
         assert lineage[0].id == agent.id
@@ -100,15 +102,15 @@ class TestGetLineage:
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await immagent.save(db, *assets1)
+        await db.save(*assets1)
 
         # Manually evolve (simulating what advance would do)
-        conv = immagent.Conversation.create()
+        conv = Conversation.create()
         await db.save_conversation(conv)
-        agent2 = agent1._evolve(conv)
+        agent2 = agent1.evolve(conv)
         await db.save_agent(agent2)
 
-        lineage = await immagent.get_lineage(agent2, db)
+        lineage = await immagent.get_lineage(db, agent2)
 
         assert len(lineage) == 2
         assert lineage[0].id == agent1.id

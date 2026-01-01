@@ -31,27 +31,27 @@ async def main():
             system_prompt="You are a calculator. Only respond with numbers.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await immagent.save(db, *assets)
+        await db.save(*assets)
         print(f"Agent v1: {agent.id}")
 
         # First turn
-        agent, assets = await immagent.advance(agent, "What is 2 + 2?", db)
-        await immagent.save(db, *assets)
+        agent, assets = await immagent.advance(db, agent, "What is 2 + 2?")
+        await db.save(*assets)
         print(f"Agent v2: {agent.id}")
 
         # Second turn
-        agent, assets = await immagent.advance(agent, "Multiply that by 10", db)
-        await immagent.save(db, *assets)
+        agent, assets = await immagent.advance(db, agent, "Multiply that by 10")
+        await db.save(*assets)
         print(f"Agent v3: {agent.id}")
 
         # Show conversation
         print("\nConversation:")
-        for msg in await immagent.get_messages(agent, db):
+        for msg in await immagent.get_messages(db, agent):
             print(f"  {msg.role}: {msg.content}")
 
         # Show lineage
         print("\nLineage:")
-        for a in await immagent.get_lineage(agent, db):
+        for a in await immagent.get_lineage(db, agent):
             print(f"  {a.id} (parent: {a.parent_id})")
 
 

@@ -8,13 +8,13 @@ An immutable agent architecture for Python. Every state transition creates a new
 |----------|-------------|
 | `immagent.create_agent()` | Create a new agent |
 | `immagent.advance()`      | Call LLM and advance state |
-| `immagent.save()`         | Persist assets to database |
 | `immagent.load_agent()`   | Load agent from cache/database |
 | `immagent.get_messages()` | Get conversation messages |
 | `immagent.get_lineage()`  | Walk agent's parent chain |
 | `immagent.clear_cache()`  | Clear the in-memory cache |
 | `immagent.Model`          | Enum of common LLM models |
 | `immagent.Database`       | PostgreSQL connection with pooling |
+| `Database.save()`         | Persist assets to database |
 | `immagent.MCPManager`     | MCP tool server manager |
 
 ## Core Concept
@@ -23,8 +23,8 @@ An immutable agent architecture for Python. Every state transition creates a new
 import immagent
 
 # Every advance returns a NEW agent with a new ID
-new_agent, assets = await immagent.advance(agent, "Hello!", db)
-await immagent.save(db, *assets)  # Persist explicitly
+new_agent, assets = await immagent.advance(db, agent, "Hello!")
+await db.save(*assets)  # Persist explicitly
 
 assert new_agent.id != agent.id  # Different UUIDs
 ```
@@ -66,12 +66,12 @@ async def main():
             system_prompt="You are a helpful assistant.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await immagent.save(db, *assets)
+        await db.save(*assets)
         print(f"Created agent: {agent.id}")
 
         # Advance the agent — returns a NEW agent
-        agent, assets = await immagent.advance(agent, "What is 2 + 2?", db)
-        await immagent.save(db, *assets)
+        agent, assets = await immagent.advance(db, agent, "What is 2 + 2?")
+        await db.save(*assets)
         print(f"New agent: {agent.id}")
 
 asyncio.run(main())
@@ -123,8 +123,8 @@ class ImmAgent(Asset):
 ```python
 import immagent
 
-agent_v2, assets = await immagent.advance(agent_v1, "Hello", db)
-await immagent.save(db, *assets)  # Persist explicitly
+agent_v2, assets = await immagent.advance(db, agent_v1, "Hello")
+await db.save(*assets)  # Persist explicitly
 
 # agent_v1 unchanged, agent_v2 is the new state
 # agent_v2.parent_id == agent_v1.id
@@ -134,9 +134,9 @@ Configuration options:
 
 ```python
 agent, assets = await immagent.advance(
+    db,
     agent,
     "Hello",
-    db,
     max_retries=3,      # Retry on transient failures (default: 3)
     timeout=120.0,      # Request timeout in seconds (default: 120)
     max_tool_rounds=10, # Max tool-use loops (default: 10)
@@ -229,8 +229,8 @@ async with immagent.MCPManager() as mcp:
     )
 
     # Advance with tools available
-    agent, assets = await immagent.advance(agent, "List files in /tmp", db, mcp=mcp)
-    await immagent.save(db, *assets)
+    agent, assets = await immagent.advance(db, agent, "List files in /tmp", mcp=mcp)
+    await db.save(*assets)
 ```
 
 Or manage the lifecycle manually:
@@ -244,6 +244,37 @@ await mcp.close()
 
 The agent will automatically discover and use available tools.
 
+### Writing MCP Servers
+
+You can create custom MCP servers in Python. See `examples/weather_server.py` for a complete example:
+
+```python
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+server = Server("my-server")
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="my_tool",
+            description="Does something useful",
+            inputSchema={"type": "object", "properties": {...}},
+        )
+    ]
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    # Implement your tool logic here
+    return [TextContent(type="text", text="Result")]
+
+async def main():
+    async with stdio_server() as (read, write):
+        await server.run(read, write, server.create_initialization_options())
+```
+
 ## Error Handling
 
 Custom exceptions for precise error handling:
@@ -252,7 +283,7 @@ Custom exceptions for precise error handling:
 import immagent
 
 try:
-    agent, assets = await immagent.advance(agent, "Hello", db)
+    agent, assets = await immagent.advance(db, agent, "Hello")
 except immagent.ConversationNotFoundError as e:
     print(f"Conversation {e.asset_id} not found")
 except immagent.SystemPromptNotFoundError as e:
@@ -349,7 +380,7 @@ make test
 ```
 src/immagent/
 ├── __init__.py     # Public API exports
-├── api.py          # advance(), create_agent(), save(), load_agent()
+├── api.py          # advance(), create_agent(), load_agent()
 ├── agent.py        # ImmAgent dataclass
 ├── assets.py       # Asset base class, TextAsset
 ├── cache.py        # In-memory UUID→Asset cache

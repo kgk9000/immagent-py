@@ -52,7 +52,7 @@ class ImmAgent(assets.Asset):
         )
         return agent, conv
 
-    def _evolve(
+    def evolve(
         self,
         conversation: messages.Conversation,
     ) -> "ImmAgent":

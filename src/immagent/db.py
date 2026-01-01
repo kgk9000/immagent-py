@@ -303,21 +303,80 @@ class Database:
 
     # -- Generic save for any asset --
 
-    async def save(self, asset: assets.Asset) -> None:
-        """Save any asset to the appropriate table."""
+    async def _save_one(self, conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, asset: assets.Asset) -> None:
+        """Save a single asset to the appropriate table using the given connection."""
         match asset:
             case agent_mod.ImmAgent():
-                await self.save_agent(asset)
+                await conn.execute(
+                    """
+                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    asset.id,
+                    asset.created_at,
+                    asset.name,
+                    asset.system_prompt_id,
+                    asset.parent_id,
+                    asset.conversation_id,
+                    asset.model,
+                )
             case messages.Conversation():
-                await self.save_conversation(asset)
+                await conn.execute(
+                    """
+                    INSERT INTO conversations (id, created_at, message_ids)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    asset.id,
+                    asset.created_at,
+                    list(asset.message_ids),
+                )
             case messages.Message():
-                await self.save_message(asset)
+                tool_calls_json = None
+                if asset.tool_calls:
+                    tool_calls_json = json.dumps(
+                        [
+                            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                            for tc in asset.tool_calls
+                        ]
+                    )
+                await conn.execute(
+                    """
+                    INSERT INTO messages (id, created_at, role, content, tool_calls, tool_call_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    asset.id,
+                    asset.created_at,
+                    asset.role,
+                    asset.content,
+                    tool_calls_json,
+                    asset.tool_call_id,
+                )
             case assets.TextAsset():
-                await self.save_text_asset(asset)
+                await conn.execute(
+                    """
+                    INSERT INTO text_assets (id, created_at, content)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    asset.id,
+                    asset.created_at,
+                    asset.content,
+                )
             case _:
                 raise TypeError(f"Unknown asset type: {type(asset)}")
 
-    async def save_all(self, *assets_to_save: assets.Asset) -> None:
-        """Save multiple assets."""
-        for asset in assets_to_save:
-            await self.save(asset)
+    async def save(self, *assets_to_save: assets.Asset) -> None:
+        """Save one or more assets to the database atomically.
+
+        All assets are saved in a single transaction - either all succeed or none do.
+        """
+        if not assets_to_save:
+            return
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                for asset in assets_to_save:
+                    await self._save_one(conn, asset)

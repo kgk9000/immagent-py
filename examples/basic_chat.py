@@ -42,7 +42,7 @@ async def main():
             system_prompt="You are a helpful assistant. Be concise.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await immagent.save(db, *assets)
+        await db.save(*assets)
         print(f"Created agent: {agent.id}\n")
 
         # Chat loop
@@ -61,17 +61,17 @@ async def main():
                 break
 
             # Advance the agent
-            agent, assets = await immagent.advance(agent, user_input, db)
-            await immagent.save(db, *assets)
+            agent, assets = await immagent.advance(db, agent, user_input)
+            await db.save(*assets)
 
             # Get the last message (assistant's response)
-            messages = await immagent.get_messages(agent, db)
+            messages = await immagent.get_messages(db, agent)
             if messages:
                 last_message = messages[-1]
                 print(f"Assistant: {last_message.content}\n")
 
         # Show lineage
-        lineage = await immagent.get_lineage(agent, db)
+        lineage = await immagent.get_lineage(db, agent)
         print(f"\nAgent went through {len(lineage)} states")
 
 

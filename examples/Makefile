@@ -39,3 +39,7 @@ simple: ## Run simple.py example
 .PHONY: chat
 chat: ## Run basic_chat.py interactive example
 	uv run python basic_chat.py
+
+.PHONY: weather-server
+weather-server: ## Run the weather MCP server (for testing)
+	uv run python weather_server.py

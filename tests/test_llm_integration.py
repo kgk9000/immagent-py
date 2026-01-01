@@ -41,18 +41,18 @@ async def test_advance_creates_new_agent(db: db_mod.Database):
         system_prompt="You are a calculator. Only respond with numbers.",
         model=immagent.Model.CLAUDE_3_5_HAIKU,
     )
-    await immagent.save(db, *assets1)
+    await db.save(*assets1)
 
     # Advance
-    agent2, assets2 = await immagent.advance(agent1, "What is 2 + 2?", db)
-    await immagent.save(db, *assets2)
+    agent2, assets2 = await immagent.advance(db, agent1, "What is 2 + 2?")
+    await db.save(*assets2)
 
     # Verify new agent
     assert agent2.id != agent1.id
     assert agent2.parent_id == agent1.id
 
     # Verify messages
-    messages = await immagent.get_messages(agent2, db)
+    messages = await immagent.get_messages(db, agent2)
     assert len(messages) == 2  # user + assistant
     assert messages[0].role == "user"
     assert messages[0].content == "What is 2 + 2?"
@@ -69,21 +69,21 @@ async def test_advance_multi_turn(db: db_mod.Database):
         system_prompt="You are helpful. Be very concise.",
         model=immagent.Model.CLAUDE_3_5_HAIKU,
     )
-    await immagent.save(db, *assets)
+    await db.save(*assets)
 
     # First turn
-    agent, assets = await immagent.advance(agent, "My name is Alice.", db)
-    await immagent.save(db, *assets)
+    agent, assets = await immagent.advance(db, agent, "My name is Alice.")
+    await db.save(*assets)
 
     # Second turn - should remember context
-    agent, assets = await immagent.advance(agent, "What is my name?", db)
-    await immagent.save(db, *assets)
+    agent, assets = await immagent.advance(db, agent, "What is my name?")
+    await db.save(*assets)
 
     # Verify it remembers
-    messages = await immagent.get_messages(agent, db)
+    messages = await immagent.get_messages(db, agent)
     last_response = messages[-1].content
     assert "Alice" in last_response
 
     # Verify lineage
-    lineage = await immagent.get_lineage(agent, db)
+    lineage = await immagent.get_lineage(db, agent)
     assert len(lineage) == 3  # original + 2 advances

@@ -1,5 +1,6 @@
-"""Turn processing - the core agent loop."""
+"""Public API for immagent."""
 
+import asyncio
 from uuid import UUID
 
 import immagent.agent as agent_mod
@@ -14,9 +15,10 @@ from immagent.logging import logger
 
 
 async def advance(
+    db: db_mod.Database,
     agent: agent_mod.ImmAgent,
     user_input: str,
-    db: db_mod.Database,
+    *,
     mcp: mcp_mod.MCPManager | None = None,
     max_tool_rounds: int = 10,
     max_retries: int = 3,
@@ -34,9 +36,9 @@ async def advance(
     The caller is responsible for persisting the returned assets.
 
     Args:
+        db: Database connection for loading conversation history
         agent: The current agent state
         user_input: The user's message
-        db: Database connection for loading conversation history
         mcp: Optional MCP manager for tool calling
         max_tool_rounds: Maximum number of tool-use rounds (safety limit)
         max_retries: Number of retry attempts for LLM calls (default: 3)
@@ -95,10 +97,15 @@ async def advance(
         if not assistant_message.tool_calls or not mcp:
             break
 
-        # Execute tool calls
-        for tool_call in assistant_message.tool_calls:
-            result = await mcp.execute(tool_call.name, tool_call.arguments)
-            tool_result_message = messages.Message.tool_result(tool_call.id, result)
+        # Execute tool calls concurrently
+        async def execute_one(tc: messages.ToolCall) -> messages.Message:
+            result = await mcp.execute(tc.name, tc.arguments)
+            return messages.Message.tool_result(tc.id, result)
+
+        tool_results = await asyncio.gather(
+            *(execute_one(tc) for tc in assistant_message.tool_calls)
+        )
+        for tool_result_message in tool_results:
             msgs.append(tool_result_message)
             new_messages.append(tool_result_message)
 
@@ -106,7 +113,7 @@ async def advance(
     new_conversation = conversation.with_messages(*[m.id for m in new_messages])
 
     # Create new agent state
-    new_agent = agent._evolve(new_conversation)
+    new_agent = agent.evolve(new_conversation)
 
     # Collect all new assets
     new_assets: list[assets.Asset] = [*new_messages, new_conversation, new_agent]
@@ -126,6 +133,7 @@ async def advance(
 
 
 def create_agent(
+    *,
     name: str,
     system_prompt: str,
     model: str | llm.Model,
@@ -147,10 +155,11 @@ def create_agent(
     # Create assets
     prompt_asset = assets.TextAsset.create(system_prompt)
     conversation = messages.Conversation.create()
+    model_str = model.value if isinstance(model, llm.Model) else model
     agent, _ = agent_mod.ImmAgent._create(
         name=name,
         system_prompt=prompt_asset,
-        model=model,
+        model=model_str,
         conversation=conversation,
     )
 
@@ -163,17 +172,7 @@ def create_agent(
     return agent, new_assets
 
 
-async def save(db: db_mod.Database, *assets_to_save: assets.Asset) -> None:
-    """Save assets to the database.
-
-    Args:
-        db: Database connection
-        *assets_to_save: Assets to persist
-    """
-    await db.save_all(*assets_to_save)
-
-
-async def load_agent(db: db_mod.Database, agent_id: UUID) -> agent_mod.ImmAgent | None:
+async def load_agent(db: db_mod.Database, agent_id: UUID) -> agent_mod.ImmAgent:
     """Load an agent by ID from cache or database.
 
     Args:
@@ -181,41 +180,50 @@ async def load_agent(db: db_mod.Database, agent_id: UUID) -> agent_mod.ImmAgent 
         agent_id: The agent's UUID
 
     Returns:
-        The agent if found, None otherwise
+        The agent
+
+    Raises:
+        AgentNotFoundError: If no agent exists with the given ID
     """
-    return await cache.get_agent(db, agent_id)
+    agent = await cache.get_agent(db, agent_id)
+    if agent is None:
+        raise exc.AgentNotFoundError(agent_id)
+    return agent
 
 
 async def get_messages(
-    agent: agent_mod.ImmAgent,
     db: db_mod.Database,
+    agent: agent_mod.ImmAgent,
 ) -> list[messages.Message]:
     """Get all messages in an agent's conversation.
 
     Args:
-        agent: The agent
         db: Database connection
+        agent: The agent
 
     Returns:
         List of messages in conversation order
+
+    Raises:
+        ConversationNotFoundError: If the agent's conversation cannot be found
     """
     conversation = await cache.get_conversation(db, agent.conversation_id)
     if conversation is None:
-        return []
+        raise exc.ConversationNotFoundError(agent.conversation_id)
     return await cache.get_messages(db, conversation.message_ids)
 
 
 async def get_lineage(
-    agent: agent_mod.ImmAgent,
     db: db_mod.Database,
+    agent: agent_mod.ImmAgent,
 ) -> list[agent_mod.ImmAgent]:
     """Get the agent's lineage by walking the parent_id chain.
 
     Returns agents from oldest ancestor to current agent.
 
     Args:
-        agent: The agent
         db: Database connection
+        agent: The agent
 
     Returns:
         List of agents from oldest to newest (current agent is last)

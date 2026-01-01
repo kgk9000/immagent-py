@@ -88,11 +88,12 @@ class TestMCPIntegration:
 
     async def test_connect_and_list_tools(self):
         """Can connect to weather server and list tools."""
+        server_path = Path(__file__).parent.parent / "examples" / "weather_server.py"
         async with MCPManager() as manager:
             await manager.connect(
                 "weather",
                 sys.executable,
-                [str(Path(__file__).parent / "weather_server.py")],
+                [str(server_path)],
                 env={**os.environ, "WEATHER_TOKEN": WEATHER_TOKEN},
             )
 
@@ -102,11 +103,12 @@ class TestMCPIntegration:
 
     async def test_execute_weather_tool(self):
         """Can execute weather tool and get result."""
+        server_path = Path(__file__).parent.parent / "examples" / "weather_server.py"
         async with MCPManager() as manager:
             await manager.connect(
                 "weather",
                 sys.executable,
-                [str(Path(__file__).parent / "weather_server.py")],
+                [str(server_path)],
                 env={**os.environ, "WEATHER_TOKEN": WEATHER_TOKEN},
             )
 
