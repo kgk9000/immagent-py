@@ -71,7 +71,7 @@ uv add immagent
 Or for development:
 
 ```bash
-git clone https://github.com/youruser/immagent-py
+git clone https://github.com/kgk9000/immagent-py
 cd immagent-py
 uv sync --all-extras
 ```
@@ -384,3 +384,29 @@ src/immagent/
 ├── mcp.py          # MCP client for tools
 └── messages.py     # Message, ToolCall, Conversation
 ```
+
+## Design Decisions
+
+- **Frozen dataclasses** — Simple, Pythonic, no ORM magic
+- **Weak ref cache** — Auto-cleanup when assets are dropped, no size tuning
+- **Write-through** — Save to DB immediately, then cache; losing cache entries is safe
+- **Agent-store binding** — Agents hold a `_store` reference to prevent mixing stores
+- **Token tracking** — `input_tokens`/`output_tokens` on assistant messages
+- **MCP for tools** — Standard protocol instead of custom tool system
+- **LiteLLM** — Multi-provider LLM support without custom abstractions
+- **Testcontainers** — Examples and tests work without manual DB setup
+
+### Why Immutability?
+
+```
+ImmAgent ──→ Conversation ──→ [Message UUIDs] ──→ Messages
+    │
+    ├──→ TextAsset (system prompt)
+    │
+    └──→ parent_id (previous agent state)
+```
+
+- **Safe caching** — Assets never change after creation
+- **Full history** — Walk `parent_id` chain to trace lineage
+- **Efficient sharing** — Ancestors share messages via UUID references
+- **No partial state** — If `advance()` fails, original agent is unchanged

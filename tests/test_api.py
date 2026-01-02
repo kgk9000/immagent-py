@@ -166,7 +166,7 @@ class TestGC:
 
 class TestCopy:
     async def test_copy_creates_new_id(self, store: Store):
-        """copy() creates agent with new ID."""
+        """copy() creates agent with new ID but same parent (sibling)."""
         agent1 = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
@@ -178,7 +178,7 @@ class TestCopy:
         assert agent2.id != agent1.id
         assert agent2.name == agent1.name
         assert agent2.model == agent1.model
-        assert agent2.parent_id is None  # New lineage
+        assert agent2.parent_id == agent1.parent_id  # Sibling, same parent
 
     async def test_copy_keeps_conversation(self, store: Store):
         """copy() keeps same conversation by default."""
@@ -220,7 +220,7 @@ class TestGetLineage:
         conv = Conversation.create()
         store._cache_all(conv)
         agent2 = agent1.evolve(conv)
-        await store.save(agent2)
+        await store._save(agent2)
 
         lineage = await agent2.get_lineage()
 

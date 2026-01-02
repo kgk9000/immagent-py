@@ -3,8 +3,9 @@ name = "immagent"
 version = "0.1.0"
 description = "Immutable agent architecture with UUID-based identity"
 readme = "README.md"
+license = "MIT"
 authors = [
-    { name = "Kleanthes Koniaris", email = "kgk@koniaris.com" }
+    { name = "Kleanthes Koniaris", email = "kleanthes@gmail.com" }
 ]
 requires-python = ">=3.13"
 dependencies = [

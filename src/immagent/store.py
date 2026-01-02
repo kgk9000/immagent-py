@@ -376,11 +376,8 @@ class Store:
             case _:
                 raise TypeError(f"Unknown asset type: {type(asset)}")
 
-    async def save(self, *assets_to_save: assets.Asset) -> None:
-        """Save assets to the database atomically.
-
-        Note: This is typically not needed as create_agent() and advance()
-        automatically save. Use this for migrating agents between stores.
+    async def _save(self, *assets_to_save: assets.Asset) -> None:
+        """Save assets to the database atomically (internal).
 
         All assets are saved in a single transaction.
         When saving an ImmAgent, its dependencies (system prompt, conversation)
@@ -465,7 +462,7 @@ class Store:
         self._cache_all(prompt_asset, conversation, agent)
 
         # Save to database
-        await self.save(agent)
+        await self._save(agent)
 
         return agent
 
@@ -624,7 +621,7 @@ class Store:
         self._cache_all(*new_messages, new_conversation, new_agent)
 
         # Save to database
-        await self.save(new_agent)
+        await self._save(new_agent)
 
         logger.info(
             "Agent advanced: old_id=%s, new_id=%s, tool_rounds=%d, new_messages=%d",
@@ -647,19 +644,23 @@ class Store:
         return await self._get_messages(conversation.message_ids)
 
     async def _copy_agent(self, agent: ImmAgent) -> ImmAgent:
-        """Create a copy of an agent with a new ID."""
+        """Create a copy of an agent for branching.
+
+        The copy shares the same parent, conversation, and system prompt,
+        allowing you to advance it in a different direction from the original.
+        """
         new_agent = ImmAgent(
             id=assets.new_id(),
             created_at=assets.now(),
             name=agent.name,
             system_prompt_id=agent.system_prompt_id,
-            parent_id=None,
+            parent_id=agent.parent_id,
             conversation_id=agent.conversation_id,
             model=agent.model,
             _store=self,
         )
         self._cache_asset(new_agent)
-        await self.save(new_agent)
+        await self._save(new_agent)
         return new_agent
 
     async def _get_agent_lineage(self, agent: ImmAgent) -> list[ImmAgent]:

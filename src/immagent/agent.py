@@ -34,7 +34,7 @@ class ImmAgent(assets.Asset):
     parent_id: UUID | None
     conversation_id: UUID
     model: str
-    _store: Store | None = field(default=None, compare=False, hash=False, repr=False)
+    _store: Store = field(compare=True, hash=False, repr=False)
 
     @classmethod
     def _create(
@@ -95,8 +95,6 @@ class ImmAgent(assets.Asset):
         Calls the LLM, handles any tool calls, and creates a new agent
         with the updated conversation. The new agent is automatically saved.
         """
-        if self._store is None:
-            raise RuntimeError("Agent not bound to a store")
         return await self._store._advance(
             self,
             user_input,
@@ -108,18 +106,16 @@ class ImmAgent(assets.Asset):
 
     async def get_messages(self) -> list[messages.Message]:
         """Get all messages in this agent's conversation."""
-        if self._store is None:
-            raise RuntimeError("Agent not bound to a store")
         return await self._store._get_agent_messages(self)
 
     async def get_lineage(self) -> list[ImmAgent]:
         """Get the chain of agents from root to this agent."""
-        if self._store is None:
-            raise RuntimeError("Agent not bound to a store")
         return await self._store._get_agent_lineage(self)
 
     async def copy(self) -> ImmAgent:
-        """Create a copy of this agent with a new ID."""
-        if self._store is None:
-            raise RuntimeError("Agent not bound to a store")
+        """Create a copy of this agent for branching.
+
+        The copy shares the same parent, conversation, and system prompt,
+        allowing you to advance it in a different direction.
+        """
         return await self._store._copy_agent(self)

@@ -11,7 +11,7 @@ class TestTextAsset:
         """TextAsset can be saved and loaded."""
         asset = TextAsset.create("Hello, world!")
 
-        await store.save(asset)
+        await store._save(asset)
         # Clear cache to force db load
         store.clear_cache()
         loaded = await store._get_text_asset(asset.id)
@@ -23,7 +23,7 @@ class TestTextAsset:
     async def test_cache_hit(self, store: Store):
         """TextAsset is cached after first load."""
         asset = TextAsset.create("Cached content")
-        await store.save(asset)
+        await store._save(asset)
         store.clear_cache()
 
         # First load - from DB
@@ -39,7 +39,7 @@ class TestMessage:
         """User message can be saved and loaded."""
         msg = Message.user("What's the weather?")
 
-        await store.save(msg)
+        await store._save(msg)
         store.clear_cache()
         loaded = await store._get_message(msg.id)
 
@@ -54,7 +54,7 @@ class TestMessage:
         )
         msg = Message.assistant("Let me check the weather.", tool_calls=tool_calls)
 
-        await store.save(msg)
+        await store._save(msg)
         store.clear_cache()
         loaded = await store._get_message(msg.id)
 
@@ -68,7 +68,7 @@ class TestMessage:
         """Tool result message persists correctly."""
         msg = Message.tool_result("call_123", "Sunny, 72°F")
 
-        await store.save(msg)
+        await store._save(msg)
         store.clear_cache()
         loaded = await store._get_message(msg.id)
 
@@ -83,7 +83,7 @@ class TestConversation:
         """Empty conversation can be saved and loaded."""
         conv = Conversation.create()
 
-        await store.save(conv)
+        await store._save(conv)
         store.clear_cache()
         loaded = await store._get_conversation(conv.id)
 
@@ -94,10 +94,10 @@ class TestConversation:
         """Conversation preserves message order."""
         msg1 = Message.user("Hello")
         msg2 = Message.assistant("Hi there!")
-        await store.save(msg1, msg2)
+        await store._save(msg1, msg2)
 
         conv = Conversation.create((msg1.id, msg2.id))
-        await store.save(conv)
+        await store._save(conv)
         store.clear_cache()
         loaded = await store._get_conversation(conv.id)
 
@@ -119,7 +119,7 @@ class TestImmAgent:
     async def test_create_agent(self, store: Store):
         """Agent can be created and saved."""
         prompt = TextAsset.create("You are helpful.")
-        await store.save(prompt)
+        await store._save(prompt)
 
         agent, conv = ImmAgent._create(
             name="TestBot",
@@ -127,7 +127,7 @@ class TestImmAgent:
             model="anthropic/claude-sonnet-4-20250514",
             store=store,
         )
-        await store.save(conv, agent)
+        await store._save(conv, agent)
         store.clear_cache()
 
         loaded = await store._get_agent(agent.id)
@@ -140,7 +140,7 @@ class TestImmAgent:
     async def test_evolve_creates_new_agent(self, store: Store):
         """evolve creates a new agent with parent link."""
         prompt = TextAsset.create("You are helpful.")
-        await store.save(prompt)
+        await store._save(prompt)
 
         agent1, conv1 = ImmAgent._create(
             name="TestBot",
@@ -148,16 +148,16 @@ class TestImmAgent:
             model="anthropic/claude-sonnet-4-20250514",
             store=store,
         )
-        await store.save(conv1, agent1)
+        await store._save(conv1, agent1)
 
         # Evolve with new conversation
         msg = Message.user("Hello")
-        await store.save(msg)
+        await store._save(msg)
         conv2 = conv1.with_messages(msg.id)
-        await store.save(conv2)
+        await store._save(conv2)
 
         agent2 = agent1.evolve(conv2)
-        await store.save(agent2)
+        await store._save(agent2)
 
         assert agent2.id != agent1.id
         assert agent2.parent_id == agent1.id
