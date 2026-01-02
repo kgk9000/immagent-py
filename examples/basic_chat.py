@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""Basic chat example using ImmAgent.
+"""Interactive chat example using ImmAgent.
 
 Requires:
-    - PostgreSQL running (or use Docker)
-    - ANTHROPIC_API_KEY environment variable set
+    - Docker running (for automatic PostgreSQL)
+    - ANTHROPIC_API_KEY in .env
 
 Usage:
-    # Start PostgreSQL
-    docker run -d --name immagent-postgres \
-        -e POSTGRES_PASSWORD=postgres \
-        -p 5432:5432 postgres:16
-
-    # Run the example
-    ANTHROPIC_API_KEY=sk-ant-... python examples/basic_chat.py
+    make chat
 """
 
 import asyncio
@@ -20,29 +14,21 @@ import os
 
 import immagent
 
+from helpers import get_store
+
 
 async def main():
-    # Check for API key
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Please set ANTHROPIC_API_KEY environment variable")
+        print("Please set ANTHROPIC_API_KEY")
         return
 
-    # Connect to PostgreSQL
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/postgres",
-    )
-
-    async with await immagent.Store.connect(db_url) as store:
-        await store.init_schema()
-
-        # Create a new agent
-        agent = store.create_agent(
+    async with get_store() as store:
+        # Create a new agent (auto-saved)
+        agent = await store.create_agent(
             name="Assistant",
             system_prompt="You are a helpful assistant. Be concise.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await store.save(agent)
         print(f"Created agent: {agent.id}\n")
 
         # Chat loop
@@ -60,18 +46,17 @@ async def main():
                 print("Goodbye!")
                 break
 
-            # Advance the agent
-            agent = await store.advance(agent, user_input)
-            await store.save(agent)
+            # Advance the agent (auto-saved)
+            agent = await agent.advance(user_input)
 
             # Get the last message (assistant's response)
-            messages = await store.get_messages(agent)
+            messages = await agent.get_messages()
             if messages:
                 last_message = messages[-1]
                 print(f"Assistant: {last_message.content}\n")
 
         # Show lineage
-        lineage = await store.get_lineage(agent)
+        lineage = await agent.get_lineage()
         print(f"\nAgent went through {len(lineage)} states")
 
 

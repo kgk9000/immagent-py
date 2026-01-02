@@ -2,8 +2,11 @@
 """Simple non-interactive example.
 
 Requires:
-    - PostgreSQL running
-    - ANTHROPIC_API_KEY environment variable set
+    - Docker running (for automatic PostgreSQL)
+    - ANTHROPIC_API_KEY in .env
+
+Usage:
+    make simple
 """
 
 import asyncio
@@ -11,47 +14,39 @@ import os
 
 import immagent
 
+from helpers import get_store
+
 
 async def main():
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("Please set ANTHROPIC_API_KEY")
         return
 
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/postgres",
-    )
-
-    async with await immagent.Store.connect(db_url) as store:
-        await store.init_schema()
-
-        # Create agent
-        agent = store.create_agent(
+    async with get_store() as store:
+        # Create agent (auto-saved)
+        agent = await store.create_agent(
             name="Calculator",
             system_prompt="You are a calculator. Only respond with numbers.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await store.save(agent)
         print(f"Agent v1: {agent.id}")
 
-        # First turn
-        agent = await store.advance(agent, "What is 2 + 2?")
-        await store.save(agent)
+        # First turn (auto-saved)
+        agent = await agent.advance("What is 2 + 2?")
         print(f"Agent v2: {agent.id}")
 
-        # Second turn
-        agent = await store.advance(agent, "Multiply that by 10")
-        await store.save(agent)
+        # Second turn (auto-saved)
+        agent = await agent.advance("Multiply that by 10")
         print(f"Agent v3: {agent.id}")
 
         # Show conversation
         print("\nConversation:")
-        for msg in await store.get_messages(agent):
+        for msg in await agent.get_messages():
             print(f"  {msg.role}: {msg.content}")
 
         # Show lineage
         print("\nLineage:")
-        for a in await store.get_lineage(agent):
+        for a in await agent.get_lineage():
             print(f"  {a.id} (parent: {a.parent_id})")
 
 

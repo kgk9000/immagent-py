@@ -40,6 +40,6 @@ simple: ## Run simple.py example
 chat: ## Run basic_chat.py interactive example
 	uv run python basic_chat.py
 
-.PHONY: weather-server
-weather-server: ## Run the weather MCP server (for testing)
-	uv run python weather_server.py
+.PHONY: mcp-tools
+mcp-tools: ## Run mcp_tools.py example
+	uv run python mcp_tools.py

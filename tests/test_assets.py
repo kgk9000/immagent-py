@@ -125,6 +125,7 @@ class TestImmAgent:
             name="TestBot",
             system_prompt=prompt,
             model="anthropic/claude-sonnet-4-20250514",
+            store=store,
         )
         await store.save(conv, agent)
         store.clear_cache()
@@ -145,6 +146,7 @@ class TestImmAgent:
             name="TestBot",
             system_prompt=prompt,
             model="anthropic/claude-sonnet-4-20250514",
+            store=store,
         )
         await store.save(conv1, agent1)
 
@@ -161,3 +163,4 @@ class TestImmAgent:
         assert agent2.parent_id == agent1.id
         assert agent2.conversation_id == conv2.id
         assert agent2.name == agent1.name  # Inherited
+        assert agent2._store is store  # Store is preserved

@@ -35,20 +35,20 @@ async def test_simple_completion():
 @needs_api_key
 async def test_advance_creates_new_agent(store: Store):
     """advance() calls LLM and returns new agent with different ID."""
-    agent1 = store.create_agent(
+    agent1 = await store.create_agent(
         name="Calculator",
         system_prompt="You are a calculator. Only respond with numbers.",
         model=immagent.Model.CLAUDE_3_5_HAIKU,
     )
 
-    agent2 = await store.advance(agent1, "What is 2 + 2?")
+    agent2 = await agent1.advance("What is 2 + 2?")
 
     # Verify new agent
     assert agent2.id != agent1.id
     assert agent2.parent_id == agent1.id
 
     # Verify messages
-    messages = await store.get_messages(agent2)
+    messages = await agent2.get_messages()
     assert len(messages) == 2  # user + assistant
     assert messages[0].role == "user"
     assert messages[0].content == "What is 2 + 2?"
@@ -59,23 +59,23 @@ async def test_advance_creates_new_agent(store: Store):
 @needs_api_key
 async def test_advance_multi_turn(store: Store):
     """advance() maintains conversation context across turns."""
-    agent = store.create_agent(
+    agent = await store.create_agent(
         name="Assistant",
         system_prompt="You are helpful. Be very concise.",
         model=immagent.Model.CLAUDE_3_5_HAIKU,
     )
 
     # First turn
-    agent = await store.advance(agent, "My name is Alice.")
+    agent = await agent.advance("My name is Alice.")
 
     # Second turn - should remember context
-    agent = await store.advance(agent, "What is my name?")
+    agent = await agent.advance("What is my name?")
 
     # Verify it remembers
-    messages = await store.get_messages(agent)
+    messages = await agent.get_messages()
     last_response = messages[-1].content
     assert "Alice" in last_response
 
     # Verify lineage
-    lineage = await store.get_lineage(agent)
+    lineage = await agent.get_lineage()
     assert len(lineage) == 3  # original + 2 advances

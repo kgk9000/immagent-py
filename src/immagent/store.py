@@ -287,6 +287,7 @@ class Store:
                     parent_id=row["parent_id"],
                     conversation_id=row["conversation_id"],
                     model=row["model"],
+                    _store=self,
                 )
                 self._cache_asset(agent)
                 return agent
@@ -363,6 +364,9 @@ class Store:
     async def save(self, *assets_to_save: assets.Asset) -> None:
         """Save assets to the database atomically.
 
+        Note: This is typically not needed as create_agent() and advance()
+        automatically save. Use this for migrating agents between stores.
+
         All assets are saved in a single transaction.
         When saving an ImmAgent, its dependencies (system prompt, conversation)
         are automatically saved first if they're in the cache.
@@ -412,7 +416,7 @@ class Store:
 
     # -- Public API --
 
-    def create_agent(
+    async def create_agent(
         self,
         *,
         name: str,
@@ -421,7 +425,7 @@ class Store:
     ) -> ImmAgent:
         """Create a new agent with an empty conversation.
 
-        The agent is cached but not persisted. Call save() to persist.
+        The agent is saved immediately and cached.
 
         Args:
             name: Human-readable name for the agent
@@ -429,7 +433,7 @@ class Store:
             model: LiteLLM model string or Model enum
 
         Returns:
-            The new agent (also cached)
+            The new agent
         """
         prompt_asset = assets.TextAsset.create(system_prompt)
         conversation = messages.Conversation.create()
@@ -438,11 +442,15 @@ class Store:
             name=name,
             system_prompt=prompt_asset,
             model=model_str,
+            store=self,
             conversation=conversation,
         )
 
-        # Cache all assets
+        # Cache first (save() looks up dependencies in cache)
         self._cache_all(prompt_asset, conversation, agent)
+
+        # Save to database
+        await self.save(agent)
 
         return agent
 
@@ -463,7 +471,7 @@ class Store:
             raise exc.AgentNotFoundError(agent_id)
         return agent
 
-    async def advance(
+    async def _advance(
         self,
         agent: ImmAgent,
         user_input: str,
@@ -473,25 +481,9 @@ class Store:
         max_retries: int = 3,
         timeout: float | None = 120.0,
     ) -> ImmAgent:
-        """Advance the agent with a user message.
+        """Advance the agent with a user message (internal).
 
-        This calls the LLM, executes any tool calls, and returns a new agent.
-        The new agent is cached but not persisted. Call save() to persist.
-
-        Args:
-            agent: The current agent state
-            user_input: The user's message
-            mcp: Optional MCP manager for tool calling
-            max_tool_rounds: Maximum tool-use rounds (default: 10)
-            max_retries: LLM retry attempts (default: 3)
-            timeout: LLM timeout in seconds (default: 120)
-
-        Returns:
-            The new agent state (also cached)
-
-        Raises:
-            ConversationNotFoundError: If the conversation cannot be found
-            SystemPromptNotFoundError: If the system prompt cannot be found
+        Use agent.advance() instead.
         """
         logger.info(
             "Advancing agent: id=%s, name=%s, model=%s",
@@ -560,8 +552,11 @@ class Store:
         # Create new agent state
         new_agent = agent.evolve(new_conversation)
 
-        # Cache all new assets
+        # Cache new assets first (save() looks up dependencies in cache)
         self._cache_all(*new_messages, new_conversation, new_agent)
+
+        # Save to database
+        await self.save(new_agent)
 
         logger.info(
             "Agent advanced: old_id=%s, new_id=%s, tool_rounds=%d, new_messages=%d",
@@ -573,33 +568,20 @@ class Store:
 
         return new_agent
 
-    async def get_messages(self, agent: ImmAgent) -> list[messages.Message]:
-        """Get all messages in an agent's conversation.
+    async def _get_agent_messages(self, agent: ImmAgent) -> list[messages.Message]:
+        """Get all messages in an agent's conversation (internal).
 
-        Args:
-            agent: The agent
-
-        Returns:
-            List of messages in conversation order
-
-        Raises:
-            ConversationNotFoundError: If the conversation cannot be found
+        Use agent.get_messages() instead.
         """
         conversation = await self._get_conversation(agent.conversation_id)
         if conversation is None:
             raise exc.ConversationNotFoundError(agent.conversation_id)
         return await self._get_messages(conversation.message_ids)
 
-    async def get_lineage(self, agent: ImmAgent) -> list[ImmAgent]:
-        """Get the agent's lineage by walking the parent_id chain.
+    async def _get_agent_lineage(self, agent: ImmAgent) -> list[ImmAgent]:
+        """Get the agent's lineage (internal).
 
-        Returns agents from oldest ancestor to current agent.
-
-        Args:
-            agent: The agent
-
-        Returns:
-            List of agents from oldest to newest (current agent is last)
+        Use agent.get_lineage() instead.
         """
         lineage: list[ImmAgent] = [agent]
         current = agent

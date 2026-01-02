@@ -12,19 +12,18 @@ async def main():
     async with await immagent.Store.connect("postgresql://...") as store:
         await store.init_schema()
 
-        # Create an agent
-        agent = store.create_agent(
+        # Create an agent (auto-saved)
+        agent = await store.create_agent(
             name="Assistant",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        # Advance returns a NEW agent with a new ID
-        agent = await store.advance(agent, "Hello!")
-        await store.save(agent)
+        # Advance returns a NEW agent with a new ID (auto-saved)
+        agent = await agent.advance("Hello!")
 
         # Get messages
-        for msg in await store.get_messages(agent):
+        for msg in await agent.get_messages():
             print(f"{msg.role}: {msg.content}")
 
 asyncio.run(main())
@@ -36,13 +35,12 @@ asyncio.run(main())
 |--------|-------------|
 | `Store.connect(dsn)` | Connect to PostgreSQL |
 | `store.init_schema()` | Create tables if not exist |
-| `store.create_agent()` | Create a new agent |
-| `store.advance(agent, input)` | Call LLM and return new agent |
-| `store.save(agent)` | Persist agent and dependencies |
+| `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
-| `store.get_messages(agent)` | Get conversation messages |
-| `store.get_lineage(agent)` | Walk agent's parent chain |
 | `store.clear_cache()` | Clear in-memory cache |
+| `agent.advance(input)` | Call LLM and return new agent |
+| `agent.get_messages()` | Get conversation messages |
+| `agent.get_lineage()` | Walk agent's parent chain |
 | `immagent.Model` | Enum of common LLM models |
 | `immagent.MCPManager` | MCP tool server manager |
 
@@ -50,8 +48,7 @@ asyncio.run(main())
 
 ```python
 # Every advance returns a NEW agent with a new ID
-new_agent = await store.advance(agent, "Hello!")
-await store.save(new_agent)
+new_agent = await agent.advance("Hello!")
 
 assert new_agent.id != agent.id  # Different UUIDs
 assert new_agent.parent_id == agent.id  # Linked
@@ -130,9 +127,25 @@ class ImmAgent(Asset):
     model: str                  # LiteLLM model string
 ```
 
+Agents are bound to a Store and have methods for interaction:
+
+```python
+# Create via store (auto-saved)
+agent = await store.create_agent(
+    name="Bot",
+    system_prompt="You are helpful.",
+    model=immagent.Model.CLAUDE_3_5_HAIKU,
+)
+
+# Interact via agent methods (auto-saved)
+agent = await agent.advance("Hello!")
+messages = await agent.get_messages()
+lineage = await agent.get_lineage()
+```
+
 ### Advancing
 
-`store.advance()` is the main entry point:
+`agent.advance()` is the main entry point:
 
 1. Load conversation history and system prompt
 2. Add the user message
@@ -140,19 +153,13 @@ class ImmAgent(Asset):
 4. If tool calls requested, execute via MCP and loop
 5. Create new `Conversation` with all messages
 6. Create new `ImmAgent` with `parent_id` pointing to the old agent
-7. Cache the new assets
+7. Save to database and cache
 8. Return the new agent
-
-```python
-new_agent = await store.advance(agent, "Hello")
-await store.save(new_agent)  # Persist when ready
-```
 
 Configuration options:
 
 ```python
-agent = await store.advance(
-    agent,
+agent = await agent.advance(
     "Hello",
     max_retries=3,      # Retry on transient failures (default: 3)
     timeout=120.0,      # Request timeout in seconds (default: 120)
@@ -160,14 +167,16 @@ agent = await store.advance(
 )
 ```
 
-### Saving
+### Auto-Save
 
-`store.save(agent)` persists the agent and its dependencies (system prompt, conversation, messages) atomically in a single transaction.
+All mutations are automatically persisted. There's no need to call `save()` manually:
 
 ```python
-agent = store.create_agent(...)  # Cached, not persisted
-await store.save(agent)          # Now in database
+agent = await store.create_agent(...)  # Saved immediately
+agent = await agent.advance("Hello")   # Saved immediately
 ```
+
+The cache is write-through: items are saved to the database first, then cached. LRU eviction is always safe since everything is already persisted.
 
 ## LLM Providers
 
@@ -211,8 +220,7 @@ async with immagent.MCPManager() as mcp:
         args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
     )
 
-    agent = await store.advance(agent, "List files in /tmp", mcp=mcp)
-    await store.save(agent)
+    agent = await agent.advance("List files in /tmp", mcp=mcp)
 ```
 
 The agent will automatically discover and use available tools.
@@ -254,7 +262,7 @@ Custom exceptions for precise error handling:
 
 ```python
 try:
-    agent = await store.advance(agent, "Hello")
+    agent = await agent.advance("Hello")
 except immagent.ConversationNotFoundError as e:
     print(f"Conversation {e.asset_id} not found")
 except immagent.SystemPromptNotFoundError as e:
@@ -350,7 +358,7 @@ make test
 src/immagent/
 ├── __init__.py     # Public API exports
 ├── store.py        # Store (main interface - cache + db)
-├── agent.py        # ImmAgent dataclass
+├── agent.py        # ImmAgent dataclass with methods
 ├── assets.py       # Asset base class, TextAsset
 ├── exceptions.py   # Custom exception types
 ├── llm.py          # LiteLLM wrapper with retries/timeout

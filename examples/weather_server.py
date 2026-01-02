@@ -14,9 +14,9 @@ Usage:
     WEATHER_TOKEN=your_key python examples/weather_server.py
 
     # Use with immagent
-    async with MCPManager() as mcp:
+    async with immagent.MCPManager() as mcp:
         await mcp.connect("weather", "python", ["examples/weather_server.py"])
-        agent, assets = await advance(agent, "What's the weather in Tokyo?", db, mcp=mcp)
+        agent = await store.advance(agent, "What's the weather in Tokyo?", mcp=mcp)
 
 The server communicates via stdio using the MCP protocol, so it can be used
 with any MCP-compatible client.

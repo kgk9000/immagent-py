@@ -10,9 +10,9 @@ from immagent.messages import Conversation
 
 
 class TestCreateAgent:
-    def test_creates_agent(self, store: Store):
+    async def test_creates_agent(self, store: Store):
         """create_agent returns an agent."""
-        agent = store.create_agent(
+        agent = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
@@ -20,9 +20,9 @@ class TestCreateAgent:
 
         assert agent.name == "TestBot"
 
-    def test_accepts_string_model(self, store: Store):
+    async def test_accepts_string_model(self, store: Store):
         """create_agent accepts a string model."""
-        agent = store.create_agent(
+        agent = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
@@ -30,9 +30,9 @@ class TestCreateAgent:
 
         assert agent.model == "anthropic/claude-3-5-haiku-20241022"
 
-    def test_accepts_model_enum(self, store: Store):
+    async def test_accepts_model_enum(self, store: Store):
         """create_agent accepts a Model enum."""
-        agent = store.create_agent(
+        agent = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
@@ -40,17 +40,32 @@ class TestCreateAgent:
 
         assert agent.model == "anthropic/claude-3-5-haiku-20241022"
 
-
-class TestSaveAndLoad:
-    async def test_save_and_load_agent(self, store: Store):
-        """Agent can be saved and loaded."""
-        agent = store.create_agent(
+    async def test_agent_is_auto_saved(self, store: Store):
+        """create_agent auto-saves to database."""
+        agent = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await store.save(agent)
 
+        # Clear cache and reload from DB
+        store.clear_cache()
+        loaded = await store.load_agent(agent.id)
+
+        assert loaded.id == agent.id
+        assert loaded.name == "TestBot"
+
+
+class TestSaveAndLoad:
+    async def test_save_and_load_agent(self, store: Store):
+        """Agent can be saved and loaded."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        # Auto-saved, so just load
         loaded = await store.load_agent(agent.id)
 
         assert loaded.id == agent.id
@@ -65,13 +80,13 @@ class TestSaveAndLoad:
 class TestGetMessages:
     async def test_empty_conversation(self, store: Store):
         """New agent has no messages."""
-        agent = store.create_agent(
+        agent = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        messages = await store.get_messages(agent)
+        messages = await agent.get_messages()
 
         assert messages == []
 
@@ -79,33 +94,32 @@ class TestGetMessages:
 class TestGetLineage:
     async def test_single_agent_lineage(self, store: Store):
         """Single agent's lineage is just itself."""
-        agent = store.create_agent(
+        agent = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        lineage = await store.get_lineage(agent)
+        lineage = await agent.get_lineage()
 
         assert len(lineage) == 1
         assert lineage[0].id == agent.id
 
     async def test_evolved_agent_lineage(self, store: Store):
         """Evolved agent's lineage includes parent."""
-        agent1 = store.create_agent(
+        agent1 = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
-        await store.save(agent1)
 
         # Manually evolve (simulating what advance would do)
         conv = Conversation.create()
-        await store.save(conv)
+        store._cache_all(conv)
         agent2 = agent1.evolve(conv)
         await store.save(agent2)
 
-        lineage = await store.get_lineage(agent2)
+        lineage = await agent2.get_lineage()
 
         assert len(lineage) == 2
         assert lineage[0].id == agent1.id
