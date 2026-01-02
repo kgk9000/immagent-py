@@ -37,10 +37,13 @@ asyncio.run(main())
 | `store.init_schema()` | Create tables if not exist |
 | `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
+| `store.delete(agent)` | Delete an agent |
+| `store.gc()` | Remove orphaned assets |
 | `store.clear_cache()` | Clear in-memory cache |
 | `agent.advance(input)` | Call LLM and return new agent |
 | `agent.get_messages()` | Get conversation messages |
 | `agent.get_lineage()` | Walk agent's parent chain |
+| `agent.copy()` | Copy agent with new ID |
 | `immagent.Model` | Enum of common LLM models |
 | `immagent.MCPManager` | MCP tool server manager |
 
@@ -79,7 +82,7 @@ uv sync --all-extras
 
 The `Store` is the main interface. It combines:
 - **Database** — PostgreSQL persistence
-- **Cache** — Thread-safe LRU cache (10,000 entries)
+- **Cache** — Weak reference cache (auto-cleanup when assets are dropped)
 
 ```python
 async with await immagent.Store.connect("postgresql://...") as store:
@@ -176,7 +179,22 @@ agent = await store.create_agent(...)  # Saved immediately
 agent = await agent.advance("Hello")   # Saved immediately
 ```
 
-The cache is write-through: items are saved to the database first, then cached. LRU eviction is always safe since everything is already persisted.
+The cache uses weak references: items are saved to the database first, then cached. When you drop an asset, it's automatically removed from the cache.
+
+### Token Tracking
+
+Assistant messages include token usage from each LLM call:
+
+```python
+messages = await agent.get_messages()
+for msg in messages:
+    if msg.role == "assistant":
+        print(f"Input: {msg.input_tokens}, Output: {msg.output_tokens}")
+
+# Total usage for a conversation
+total_input = sum(m.input_tokens or 0 for m in messages)
+total_output = sum(m.output_tokens or 0 for m in messages)
+```
 
 ## LLM Providers
 

@@ -2,18 +2,18 @@
 
 The Store is the main interface for working with agents. It combines:
 - Database persistence (PostgreSQL)
-- In-memory LRU caching
+- In-memory weak reference caching
 - Agent lifecycle operations (create, advance, load)
 """
 
 import asyncio
 import json
 import threading
+import weakref
 from typing import Any
 from uuid import UUID
 
 import asyncpg
-from cachetools import LRUCache
 
 import immagent.assets as assets
 import immagent.exceptions as exc
@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL,
     content TEXT,
     tool_calls JSONB,
-    tool_call_id TEXT
+    tool_call_id TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER
 );
 
 -- Conversations (ordered list of message IDs)
@@ -54,7 +56,7 @@ CREATE TABLE IF NOT EXISTS agents (
     created_at TIMESTAMPTZ NOT NULL,
     name TEXT NOT NULL,
     system_prompt_id UUID NOT NULL REFERENCES text_assets(id),
-    parent_id UUID REFERENCES agents(id),
+    parent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
     conversation_id UUID NOT NULL REFERENCES conversations(id),
     model TEXT NOT NULL
 );
@@ -68,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_conversation_id ON agents(conversation_id)
 class Store:
     """Unified cache and database access for agents.
 
-    The Store manages both persistence (PostgreSQL) and caching (LRU).
+    The Store manages both persistence (PostgreSQL) and caching (weak refs).
     It's the main interface for creating, loading, and advancing agents.
 
     Usage:
@@ -84,7 +86,9 @@ class Store:
 
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
-        self._cache: LRUCache[UUID, assets.Asset] = LRUCache(maxsize=10_000)
+        self._cache: weakref.WeakValueDictionary[UUID, assets.Asset] = (
+            weakref.WeakValueDictionary()
+        )
         self._lock = threading.RLock()
 
     @classmethod
@@ -181,7 +185,9 @@ class Store:
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, created_at, role, content, tool_calls, tool_call_id FROM messages WHERE id = $1",
+                """SELECT id, created_at, role, content, tool_calls, tool_call_id,
+                          input_tokens, output_tokens
+                   FROM messages WHERE id = $1""",
                 message_id,
             )
             if row:
@@ -199,6 +205,8 @@ class Store:
                     content=row["content"],
                     tool_calls=tool_calls,
                     tool_call_id=row["tool_call_id"],
+                    input_tokens=row["input_tokens"],
+                    output_tokens=row["output_tokens"],
                 )
                 self._cache_asset(msg)
                 return msg
@@ -221,7 +229,9 @@ class Store:
         if to_load:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id, created_at, role, content, tool_calls, tool_call_id FROM messages WHERE id = ANY($1)",
+                    """SELECT id, created_at, role, content, tool_calls, tool_call_id,
+                              input_tokens, output_tokens
+                       FROM messages WHERE id = ANY($1)""",
                     to_load,
                 )
             for row in rows:
@@ -239,6 +249,8 @@ class Store:
                     content=row["content"],
                     tool_calls=tool_calls,
                     tool_call_id=row["tool_call_id"],
+                    input_tokens=row["input_tokens"],
+                    output_tokens=row["output_tokens"],
                 )
                 self._cache_asset(msg)
                 msgs_by_id[msg.id] = msg
@@ -336,8 +348,9 @@ class Store:
                     )
                 await conn.execute(
                     """
-                    INSERT INTO messages (id, created_at, role, content, tool_calls, tool_call_id)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    INSERT INTO messages (id, created_at, role, content, tool_calls, tool_call_id,
+                                          input_tokens, output_tokens)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     asset.id,
@@ -346,6 +359,8 @@ class Store:
                     asset.content,
                     tool_calls_json,
                     asset.tool_call_id,
+                    asset.input_tokens,
+                    asset.output_tokens,
                 )
             case assets.TextAsset():
                 await conn.execute(
@@ -471,6 +486,59 @@ class Store:
             raise exc.AgentNotFoundError(agent_id)
         return agent
 
+    async def delete(self, agent: ImmAgent) -> None:
+        """Delete an agent from the database and cache.
+
+        Only deletes the agent record. Use gc() to clean up orphaned assets.
+
+        Args:
+            agent: The agent to delete
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
+
+        with self._lock:
+            self._cache.pop(agent.id, None)
+
+    async def gc(self) -> dict[str, int]:
+        """Garbage collect orphaned assets.
+
+        Deletes conversations, messages, and text_assets that are no longer
+        referenced by any agent. Safe to call anytime.
+
+        Returns:
+            Dict with counts of deleted assets by type.
+        """
+        async with self._pool.acquire() as conn:
+            # Delete orphaned text_assets (system prompts not used by any agent)
+            result = await conn.execute("""
+                DELETE FROM text_assets
+                WHERE id NOT IN (SELECT system_prompt_id FROM agents)
+            """)
+            text_assets = int(result.split()[-1])
+
+            # Delete orphaned conversations
+            result = await conn.execute("""
+                DELETE FROM conversations
+                WHERE id NOT IN (SELECT conversation_id FROM agents)
+            """)
+            conversations = int(result.split()[-1])
+
+            # Delete orphaned messages
+            result = await conn.execute("""
+                DELETE FROM messages
+                WHERE id NOT IN (
+                    SELECT unnest(message_ids) FROM conversations
+                )
+            """)
+            messages = int(result.split()[-1])
+
+        return {
+            "text_assets": text_assets,
+            "conversations": conversations,
+            "messages": messages,
+        }
+
     async def _advance(
         self,
         agent: ImmAgent,
@@ -577,6 +645,22 @@ class Store:
         if conversation is None:
             raise exc.ConversationNotFoundError(agent.conversation_id)
         return await self._get_messages(conversation.message_ids)
+
+    async def _copy_agent(self, agent: ImmAgent) -> ImmAgent:
+        """Create a copy of an agent with a new ID."""
+        new_agent = ImmAgent(
+            id=assets.new_id(),
+            created_at=assets.now(),
+            name=agent.name,
+            system_prompt_id=agent.system_prompt_id,
+            parent_id=None,
+            conversation_id=agent.conversation_id,
+            model=agent.model,
+            _store=self,
+        )
+        self._cache_asset(new_agent)
+        await self.save(new_agent)
+        return new_agent
 
     async def _get_agent_lineage(self, agent: ImmAgent) -> list[ImmAgent]:
         """Get the agent's lineage (internal).

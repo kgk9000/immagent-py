@@ -24,12 +24,15 @@ class Message(assets.Asset):
     """An immutable message in a conversation.
 
     Messages can be from the user, assistant, or tool (for tool results).
+    Assistant messages include token usage from the LLM call.
     """
 
     role: Literal["user", "assistant", "tool"]
     content: str | None
     tool_calls: tuple[ToolCall, ...] | None = None
     tool_call_id: str | None = None  # For tool role messages, references the tool call
+    input_tokens: int | None = None  # Token usage for assistant messages
+    output_tokens: int | None = None  # Token usage for assistant messages
 
     @classmethod
     def user(cls, content: str) -> "Message":
@@ -46,6 +49,8 @@ class Message(assets.Asset):
         cls,
         content: str | None,
         tool_calls: tuple[ToolCall, ...] | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
     ) -> "Message":
         """Create an assistant message."""
         return cls(
@@ -54,6 +59,8 @@ class Message(assets.Asset):
             role="assistant",
             content=content,
             tool_calls=tool_calls,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     @classmethod

@@ -117,3 +117,9 @@ class ImmAgent(assets.Asset):
         if self._store is None:
             raise RuntimeError("Agent not bound to a store")
         return await self._store._get_agent_lineage(self)
+
+    async def copy(self) -> ImmAgent:
+        """Create a copy of this agent with a new ID."""
+        if self._store is None:
+            raise RuntimeError("Agent not bound to a store")
+        return await self._store._copy_agent(self)

@@ -79,3 +79,29 @@ async def test_advance_multi_turn(store: Store):
     # Verify lineage
     lineage = await agent.get_lineage()
     assert len(lineage) == 3  # original + 2 advances
+
+
+@needs_api_key
+async def test_token_tracking(store: Store):
+    """advance() tracks token usage on assistant messages."""
+    agent = await store.create_agent(
+        name="Calculator",
+        system_prompt="You are a calculator. Only respond with numbers.",
+        model=immagent.Model.CLAUDE_3_5_HAIKU,
+    )
+
+    agent = await agent.advance("What is 2 + 2?")
+
+    messages = await agent.get_messages()
+    assistant_msg = messages[-1]
+
+    # Verify token counts are present
+    assert assistant_msg.input_tokens is not None
+    assert assistant_msg.output_tokens is not None
+    assert assistant_msg.input_tokens > 0
+    assert assistant_msg.output_tokens > 0
+
+    # User messages should not have token counts
+    user_msg = messages[0]
+    assert user_msg.input_tokens is None
+    assert user_msg.output_tokens is None

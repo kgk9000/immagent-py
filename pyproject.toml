@@ -11,7 +11,6 @@ dependencies = [
     "litellm",
     "asyncpg",
     "mcp",
-    "cachetools>=6.2.4",
 ]
 
 [project.optional-dependencies]

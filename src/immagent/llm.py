@@ -101,7 +101,13 @@ async def complete(
         )
         logger.debug("LLM requested %d tool call(s): %s", len(tool_calls), [tc.name for tc in tool_calls])
 
+    # Extract token usage
+    input_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+    output_tokens = getattr(usage, "completion_tokens", None) if usage else None
+
     return messages.Message.assistant(
         content=choice.content,
         tool_calls=tool_calls,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
