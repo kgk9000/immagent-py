@@ -518,6 +518,70 @@ class Store:
             raise exc.AgentNotFoundError(agent_id)
         return agent
 
+    async def load_agents(self, agent_ids: list[UUID]) -> list[ImmAgent]:
+        """Load multiple agents by ID in a single batch.
+
+        More efficient than calling load_agent() multiple times.
+
+        Args:
+            agent_ids: List of agent UUIDs to load
+
+        Returns:
+            List of agents in the same order as the input IDs
+
+        Raises:
+            AgentNotFoundError: If any agent ID is not found
+        """
+        if not agent_ids:
+            return []
+
+        agents_by_id: dict[UUID, ImmAgent] = {}
+        to_load: list[UUID] = []
+
+        # Check cache first
+        for aid in agent_ids:
+            cached = self._get_cached(aid)
+            if cached is not None and isinstance(cached, ImmAgent):
+                agents_by_id[aid] = cached
+            else:
+                to_load.append(aid)
+
+        # Batch load from DB
+        if to_load and self._pool is not None:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, created_at, name, system_prompt_id, parent_id,
+                           conversation_id, model, metadata
+                    FROM agents WHERE id = ANY($1)
+                    """,
+                    to_load,
+                )
+            for row in rows:
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                agent = ImmAgent(
+                    id=row["id"],
+                    created_at=row["created_at"],
+                    name=row["name"],
+                    system_prompt_id=row["system_prompt_id"],
+                    parent_id=row["parent_id"],
+                    conversation_id=row["conversation_id"],
+                    model=row["model"],
+                    _store=self,
+                    metadata=metadata,
+                )
+                self._cache_asset(agent)
+                agents_by_id[agent.id] = agent
+
+        # Verify all agents were found and return in order
+        result: list[ImmAgent] = []
+        for aid in agent_ids:
+            if aid not in agents_by_id:
+                raise exc.AgentNotFoundError(aid)
+            result.append(agents_by_id[aid])
+
+        return result
+
     async def delete(self, agent: ImmAgent) -> None:
         """Delete an agent from the database and cache.
 

@@ -77,6 +77,109 @@ class TestSaveAndLoad:
             await store.load_agent(uuid.uuid4())
 
 
+class TestBatchLoading:
+    async def test_load_agents_empty_list(self, store: Store):
+        """load_agents with empty list returns empty list."""
+        result = await store.load_agents([])
+        assert result == []
+
+    async def test_load_agents_single(self, store: Store):
+        """load_agents works with single agent."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.load_agents([agent.id])
+
+        assert len(result) == 1
+        assert result[0].id == agent.id
+
+    async def test_load_agents_multiple(self, store: Store):
+        """load_agents loads multiple agents in one batch."""
+        agent1 = await store.create_agent(
+            name="Bot1",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        agent2 = await store.create_agent(
+            name="Bot2",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        agent3 = await store.create_agent(
+            name="Bot3",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.load_agents([agent1.id, agent2.id, agent3.id])
+
+        assert len(result) == 3
+        assert result[0].id == agent1.id
+        assert result[1].id == agent2.id
+        assert result[2].id == agent3.id
+
+    async def test_load_agents_preserves_order(self, store: Store):
+        """load_agents returns agents in the same order as input IDs."""
+        agent1 = await store.create_agent(
+            name="Bot1",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        agent2 = await store.create_agent(
+            name="Bot2",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        # Request in reverse order
+        result = await store.load_agents([agent2.id, agent1.id])
+
+        assert result[0].id == agent2.id
+        assert result[1].id == agent1.id
+
+    async def test_load_agents_uses_cache(self, store: Store):
+        """load_agents returns cached agents without DB hit."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        # Agent is cached, this should work even without DB
+        result = await store.load_agents([agent.id])
+
+        assert result[0] is agent  # Same object from cache
+
+    async def test_load_agents_from_db(self, store: Store):
+        """load_agents loads from DB when not cached."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        agent_id = agent.id
+
+        store.clear_cache()
+        result = await store.load_agents([agent_id])
+
+        assert result[0].id == agent_id
+        assert result[0].name == "TestBot"
+
+    async def test_load_agents_nonexistent_raises(self, store: Store):
+        """load_agents raises AgentNotFoundError if any ID not found."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        with pytest.raises(immagent.AgentNotFoundError):
+            await store.load_agents([agent.id, uuid.uuid4()])
+
+
 class TestGetMessages:
     async def test_empty_conversation(self, store: Store):
         """New agent has no messages."""
