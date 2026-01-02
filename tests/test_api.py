@@ -219,7 +219,7 @@ class TestGetLineage:
         # Manually evolve (simulating what advance would do)
         conv = Conversation.create()
         store._cache_all(conv)
-        agent2 = agent1.evolve(conv)
+        agent2 = agent1._evolve(conv)
         await store._save(agent2)
 
         lineage = await agent2.get_lineage()
@@ -323,3 +323,159 @@ class TestValidation:
             with pytest.raises(immagent.ValidationError) as exc_info:
                 await agent.advance("Hello", timeout=0)
             assert exc_info.value.field == "timeout"
+
+
+class TestMetadata:
+    """Tests for agent metadata."""
+
+    async def test_create_agent_with_metadata(self, store: Store):
+        """Agent can be created with metadata."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            metadata={"task_id": "abc123", "step": 1},
+        )
+
+        assert agent.metadata == {"task_id": "abc123", "step": 1}
+
+    async def test_create_agent_without_metadata(self, store: Store):
+        """Agent without metadata has empty dict."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        assert agent.metadata == {}
+
+    async def test_metadata_persists(self, store: Store):
+        """Metadata is saved and loaded from database."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            metadata={"key": "value"},
+        )
+
+        store.clear_cache()
+        loaded = await store.load_agent(agent.id)
+
+        assert loaded.metadata == {"key": "value"}
+
+    async def test_with_metadata_creates_new_agent(self):
+        """with_metadata creates new agent with updated metadata."""
+        async with MemoryStore() as store:
+            agent1 = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+                metadata={"step": 1},
+            )
+
+            agent2 = await agent1.with_metadata({"step": 2})
+
+            assert agent2.id != agent1.id
+            assert agent2.parent_id == agent1.id
+            assert agent2.metadata == {"step": 2}
+            assert agent1.metadata == {"step": 1}  # Original unchanged
+
+    async def test_metadata_inherited_on_evolve(self, store: Store):
+        """Metadata is inherited when agent evolves."""
+        agent1 = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            metadata={"persistent": True},
+        )
+
+        # Manually evolve
+        conv = Conversation.create()
+        store._cache_all(conv)
+        agent2 = agent1._evolve(conv)
+        await store._save(agent2)
+
+        assert agent2.metadata == {"persistent": True}
+
+    async def test_copy_preserves_metadata(self, store: Store):
+        """Copy preserves metadata."""
+        agent1 = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            metadata={"copied": True},
+        )
+
+        agent2 = await agent1.copy()
+
+        assert agent2.metadata == {"copied": True}
+
+
+class TestTokenUsage:
+    """Tests for token usage tracking."""
+
+    async def test_empty_conversation_zero_tokens(self):
+        """New agent with no messages has zero tokens."""
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+            )
+
+            input_tokens, output_tokens = await agent.get_token_usage()
+
+            assert input_tokens == 0
+            assert output_tokens == 0
+
+    async def test_token_usage_sums_assistant_messages(self, store: Store):
+        """Token usage sums across assistant messages."""
+        from immagent.messages import Message
+
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        # Manually add messages with token counts
+        user_msg = Message.user("Hello")
+        asst_msg1 = Message.assistant("Hi!", input_tokens=10, output_tokens=5)
+        asst_msg2 = Message.assistant("How can I help?", input_tokens=15, output_tokens=8)
+        await store._save(user_msg, asst_msg1, asst_msg2)
+
+        conv = Conversation.create((user_msg.id, asst_msg1.id, asst_msg2.id))
+        store._cache_all(conv)
+        agent2 = agent._evolve(conv)
+        await store._save(agent2)
+
+        input_tokens, output_tokens = await agent2.get_token_usage()
+
+        assert input_tokens == 25  # 10 + 15
+        assert output_tokens == 13  # 5 + 8
+
+    async def test_token_usage_ignores_user_and_tool_messages(self, store: Store):
+        """Token usage only counts assistant messages."""
+        from immagent.messages import Message
+
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        # Add various message types
+        user_msg = Message.user("Hello")
+        asst_msg = Message.assistant("Let me check.", input_tokens=10, output_tokens=5)
+        tool_msg = Message.tool_result("call_123", "Result")
+        await store._save(user_msg, asst_msg, tool_msg)
+
+        conv = Conversation.create((user_msg.id, asst_msg.id, tool_msg.id))
+        store._cache_all(conv)
+        agent2 = agent._evolve(conv)
+        await store._save(agent2)
+
+        input_tokens, output_tokens = await agent2.get_token_usage()
+
+        assert input_tokens == 10
+        assert output_tokens == 5

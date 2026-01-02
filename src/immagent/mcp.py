@@ -2,7 +2,7 @@
 
 import json
 import time
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -10,32 +10,6 @@ from mcp.client.stdio import stdio_client
 
 import immagent.exceptions as exc
 from immagent.logging import logger
-
-
-@asynccontextmanager
-async def connect_server(
-    command: str, args: list[str] | None = None, env: dict[str, str] | None = None
-):
-    """Connect to an MCP server via stdio.
-
-    Args:
-        command: The command to run the MCP server
-        args: Optional arguments to the command
-        env: Optional environment variables
-
-    Yields:
-        An MCP ClientSession
-    """
-    server_params = StdioServerParameters(
-        command=command,
-        args=args or [],
-        env=env,
-    )
-
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
 
 
 def tool_to_openai_format(tool: dict[str, Any]) -> dict[str, Any]:
@@ -50,13 +24,7 @@ def tool_to_openai_format(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def get_tools_from_session(session: ClientSession) -> list[dict[str, Any]]:
-    """Get all available tools from an MCP session in OpenAI format."""
-    result = await session.list_tools()
-    return [tool_to_openai_format(t.model_dump()) for t in result.tools]
-
-
-async def execute_tool(
+async def _execute_tool(
     session: ClientSession,
     tool_name: str,
     arguments: dict[str, Any],
@@ -202,7 +170,7 @@ class MCPManager:
         start_time = time.perf_counter()
 
         try:
-            result = await execute_tool(session, tool_name, args_dict)
+            result = await _execute_tool(session, tool_name, args_dict)
         except Exception as e:
             raise exc.ToolExecutionError(tool_name, str(e)) from e
 

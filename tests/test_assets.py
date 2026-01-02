@@ -141,7 +141,7 @@ class TestImmAgent:
         assert loaded.parent_id is None
 
     async def test_evolve_creates_new_agent(self, store: Store):
-        """evolve creates a new agent with parent link."""
+        """_evolve creates a new agent with parent link."""
         prompt = SystemPrompt.create("You are helpful.")
         conv1 = Conversation.create()
         await store._save(prompt, conv1)
@@ -161,7 +161,7 @@ class TestImmAgent:
         conv2 = conv1.with_messages(msg.id)
         await store._save(conv2)
 
-        agent2 = agent1.evolve(conv2)
+        agent2 = agent1._evolve(conv2)
         await store._save(agent2)
 
         assert agent2.id != agent1.id

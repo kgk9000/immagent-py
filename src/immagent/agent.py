@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import immagent.assets as assets
@@ -27,6 +27,7 @@ class ImmAgent(assets.Asset):
         parent_id: UUID of the previous agent state (None for initial agent)
         conversation_id: UUID of the Conversation asset
         model: LiteLLM model string (e.g., "anthropic/claude-sonnet-4-20250514")
+        metadata: Custom key-value data attached to the agent
     """
 
     name: str
@@ -35,6 +36,7 @@ class ImmAgent(assets.Asset):
     conversation_id: UUID
     model: str
     _store: Store = field(compare=True, hash=False, repr=False)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def _create(
@@ -45,6 +47,7 @@ class ImmAgent(assets.Asset):
         conversation_id: UUID,
         model: str,
         store: Store,
+        metadata: dict[str, Any] | None = None,
     ) -> ImmAgent:
         """Create a new agent (internal).
 
@@ -59,16 +62,19 @@ class ImmAgent(assets.Asset):
             parent_id=None,
             conversation_id=conversation_id,
             model=model,
+            metadata=metadata or {},
             _store=store,
         )
 
-    def evolve(
+    def _evolve(
         self,
         conversation: messages.Conversation,
+        metadata: dict[str, Any] | None = None,
     ) -> ImmAgent:
-        """Create a new agent state with an updated conversation.
+        """Create a new agent state with an updated conversation (internal).
 
         The new agent links back to this one via parent_id.
+        Metadata is inherited from the current agent unless overridden.
         """
         return ImmAgent(
             id=assets.new_id(),
@@ -78,8 +84,23 @@ class ImmAgent(assets.Asset):
             parent_id=self.id,
             conversation_id=conversation.id,
             model=self.model,
+            metadata=metadata if metadata is not None else self.metadata,
             _store=self._store,
         )
+
+    async def with_metadata(self, metadata: dict[str, Any]) -> ImmAgent:
+        """Create a new agent with updated metadata.
+
+        The new agent has the same conversation but new metadata.
+        Useful for updating agent state between turns.
+
+        Args:
+            metadata: New metadata dict (replaces existing metadata)
+
+        Returns:
+            A new agent with updated metadata
+        """
+        return await self._store._update_metadata(self, metadata)
 
     async def advance(
         self,
@@ -87,13 +108,20 @@ class ImmAgent(assets.Asset):
         *,
         mcp: MCPManager | None = None,
         max_retries: int = 3,
-        timeout: float = 120.0,
+        timeout: float | None = 120.0,
         max_tool_rounds: int = 10,
     ) -> ImmAgent:
         """Process a user message and return a new agent with the response.
 
         Calls the LLM, handles any tool calls, and creates a new agent
         with the updated conversation. The new agent is automatically saved.
+
+        Args:
+            user_input: The user's message
+            mcp: Optional MCP manager for tool execution
+            max_retries: Number of retries for LLM calls (default: 3)
+            timeout: Request timeout in seconds, or None for no timeout (default: 120)
+            max_tool_rounds: Maximum tool call rounds (default: 10)
         """
         return await self._store._advance(
             self,
@@ -119,3 +147,15 @@ class ImmAgent(assets.Asset):
         allowing you to advance it in a different direction.
         """
         return await self._store._copy_agent(self)
+
+    async def get_token_usage(self) -> tuple[int, int]:
+        """Get total token usage for this agent's conversation.
+
+        Returns:
+            A tuple of (input_tokens, output_tokens) summed across all
+            assistant messages in the conversation.
+        """
+        msgs = await self.get_messages()
+        input_tokens = sum(m.input_tokens or 0 for m in msgs if m.role == "assistant")
+        output_tokens = sum(m.output_tokens or 0 for m in msgs if m.role == "assistant")
+        return input_tokens, output_tokens

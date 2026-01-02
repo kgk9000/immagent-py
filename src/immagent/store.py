@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS agents (
     system_prompt_id UUID NOT NULL REFERENCES text_assets(id),
     parent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
     conversation_id UUID NOT NULL REFERENCES conversations(id),
-    model TEXT NOT NULL
+    model TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'
 );
 
 -- Indexes for common lookups
@@ -166,6 +167,26 @@ class Store:
 
     # -- Load operations (cache + db) --
 
+    def _message_from_row(self, row: asyncpg.Record) -> messages.Message:
+        """Build a Message from a database row."""
+        tool_calls = None
+        if row["tool_calls"]:
+            tc_data = json.loads(row["tool_calls"])
+            tool_calls = tuple(
+                messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
+                for tc in tc_data
+            )
+        return messages.Message(
+            id=row["id"],
+            created_at=row["created_at"],
+            role=row["role"],
+            content=row["content"],
+            tool_calls=tool_calls,
+            tool_call_id=row["tool_call_id"],
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
+        )
+
     async def _get_system_prompt(self, asset_id: UUID) -> assets.SystemPrompt | None:
         cached = self._get_cached(asset_id)
         if cached is not None:
@@ -205,23 +226,7 @@ class Store:
                 message_id,
             )
             if row:
-                tool_calls = None
-                if row["tool_calls"]:
-                    tc_data = json.loads(row["tool_calls"])
-                    tool_calls = tuple(
-                        messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                        for tc in tc_data
-                    )
-                msg = messages.Message(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    role=row["role"],
-                    content=row["content"],
-                    tool_calls=tool_calls,
-                    tool_call_id=row["tool_call_id"],
-                    input_tokens=row["input_tokens"],
-                    output_tokens=row["output_tokens"],
-                )
+                msg = self._message_from_row(row)
                 self._cache_asset(msg)
                 return msg
         return None
@@ -249,23 +254,7 @@ class Store:
                     to_load,
                 )
             for row in rows:
-                tool_calls = None
-                if row["tool_calls"]:
-                    tc_data = json.loads(row["tool_calls"])
-                    tool_calls = tuple(
-                        messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                        for tc in tc_data
-                    )
-                msg = messages.Message(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    role=row["role"],
-                    content=row["content"],
-                    tool_calls=tool_calls,
-                    tool_call_id=row["tool_call_id"],
-                    input_tokens=row["input_tokens"],
-                    output_tokens=row["output_tokens"],
-                )
+                msg = self._message_from_row(row)
                 self._cache_asset(msg)
                 msgs_by_id[msg.id] = msg
 
@@ -310,12 +299,13 @@ class Store:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id, model
+                SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata
                 FROM agents WHERE id = $1
                 """,
                 agent_id,
             )
             if row:
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
                 agent = ImmAgent(
                     id=row["id"],
                     created_at=row["created_at"],
@@ -324,6 +314,7 @@ class Store:
                     parent_id=row["parent_id"],
                     conversation_id=row["conversation_id"],
                     model=row["model"],
+                    metadata=metadata,
                     _store=self,
                 )
                 self._cache_asset(agent)
@@ -339,8 +330,8 @@ class Store:
             case ImmAgent():
                 await conn.execute(
                     """
-                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     asset.id,
@@ -350,6 +341,7 @@ class Store:
                     asset.parent_id,
                     asset.conversation_id,
                     asset.model,
+                    json.dumps(asset.metadata),
                 )
             case messages.Conversation():
                 await conn.execute(
@@ -463,6 +455,7 @@ class Store:
         name: str,
         system_prompt: str,
         model: str,
+        metadata: dict[str, Any] | None = None,
     ) -> ImmAgent:
         """Create a new agent with an empty conversation.
 
@@ -472,6 +465,7 @@ class Store:
             name: Human-readable name for the agent
             system_prompt: The system prompt content
             model: LiteLLM model string (e.g., Model.CLAUDE_3_5_HAIKU)
+            metadata: Optional custom key-value data for the agent
 
         Returns:
             The new agent
@@ -496,6 +490,7 @@ class Store:
             conversation_id=conversation.id,
             model=model_str,
             store=self,
+            metadata=metadata,
         )
 
         # Cache first (_save() looks up dependencies in cache)
@@ -639,9 +634,9 @@ class Store:
         # New messages created in this turn
         new_messages: list[messages.Message] = [user_message]
 
-        # Tool loop
-        tool_round = 0
-        for tool_round in range(max_tool_rounds):
+        # Tool loop - each iteration is one LLM call, possibly followed by tool execution
+        llm_calls = 0
+        for _ in range(max_tool_rounds):
             # Call LLM
             assistant_message = await llm.complete(
                 model=agent.model,
@@ -651,6 +646,7 @@ class Store:
                 max_retries=max_retries,
                 timeout=timeout,
             )
+            llm_calls += 1
             msgs.append(assistant_message)
             new_messages.append(assistant_message)
 
@@ -677,7 +673,7 @@ class Store:
         new_conversation = conversation.with_messages(*[m.id for m in new_messages])
 
         # Create new agent state
-        new_agent = agent.evolve(new_conversation)
+        new_agent = agent._evolve(new_conversation)
 
         # Cache new assets first (save() looks up dependencies in cache)
         self._cache_all(*new_messages, new_conversation, new_agent)
@@ -686,10 +682,10 @@ class Store:
         await self._save(new_agent)
 
         logger.info(
-            "Agent advanced: old_id=%s, new_id=%s, tool_rounds=%d, new_messages=%d",
+            "Agent advanced: old_id=%s, new_id=%s, llm_calls=%d, new_messages=%d",
             agent.id,
             new_agent.id,
-            tool_round + 1,
+            llm_calls,
             len(new_messages),
         )
 
@@ -719,6 +715,27 @@ class Store:
             parent_id=agent.parent_id,
             conversation_id=agent.conversation_id,
             model=agent.model,
+            metadata=agent.metadata,
+            _store=self,
+        )
+        self._cache_asset(new_agent)
+        await self._save(new_agent)
+        return new_agent
+
+    async def _update_metadata(self, agent: ImmAgent, metadata: dict[str, Any]) -> ImmAgent:
+        """Create a new agent with updated metadata (internal).
+
+        Use agent.with_metadata() instead.
+        """
+        new_agent = ImmAgent(
+            id=assets.new_id(),
+            created_at=assets.now(),
+            name=agent.name,
+            system_prompt_id=agent.system_prompt_id,
+            parent_id=agent.id,
+            conversation_id=agent.conversation_id,
+            model=agent.model,
+            metadata=metadata,
             _store=self,
         )
         self._cache_asset(new_agent)
@@ -747,8 +764,8 @@ class Store:
 class MemoryStore(Store):
     """In-memory store with no database persistence.
 
-    Agents exist only while referenced. Useful for experimentation,
-    testing, or stateless use cases.
+    Assets persist until explicitly deleted or the store is closed.
+    Useful for experimentation, testing, or stateless use cases.
 
     Usage:
         async with MemoryStore() as store:
@@ -762,3 +779,5 @@ class MemoryStore(Store):
 
     def __init__(self) -> None:
         super().__init__(pool=None)
+        # Use strong references since there's no DB fallback
+        self._cache: dict[UUID, assets.Asset] = {}
