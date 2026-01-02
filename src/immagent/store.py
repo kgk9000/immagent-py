@@ -73,18 +73,19 @@ class Store:
     The Store manages both persistence (PostgreSQL) and caching (weak refs).
     It's the main interface for creating, loading, and advancing agents.
 
-    Usage:
+    Usage with PostgreSQL:
         async with await Store.connect("postgresql://...") as store:
             agent = await store.create_agent(
                 name="Bot",
                 system_prompt="You are helpful.",
                 model=Model.CLAUDE_3_5_HAIKU,
             )
-            agent = await store.advance(agent, "Hello!")
-            print(await store.get_messages(agent))
+            agent = await agent.advance("Hello!")
+
+    For in-memory stores without persistence, use MemoryStore instead.
     """
 
-    def __init__(self, pool: asyncpg.Pool):
+    def __init__(self, pool: asyncpg.Pool | None = None):
         self._pool = pool
         self._cache: weakref.WeakValueDictionary[UUID, assets.Asset] = (
             weakref.WeakValueDictionary()
@@ -121,9 +122,11 @@ class Store:
             raise RuntimeError("Failed to create database connection pool")
         return cls(pool)
 
+
     async def close(self) -> None:
-        """Close the database connection pool."""
-        await self._pool.close()
+        """Close the database connection pool (if any)."""
+        if self._pool is not None:
+            await self._pool.close()
 
     async def __aenter__(self) -> "Store":
         return self
@@ -132,7 +135,12 @@ class Store:
         await self.close()
 
     async def init_schema(self) -> None:
-        """Initialize the database schema (creates tables if not exist)."""
+        """Initialize the database schema (creates tables if not exist).
+
+        No-op for in-memory stores.
+        """
+        if self._pool is None:
+            return
         async with self._pool.acquire() as conn:
             await conn.execute(SCHEMA)
 
@@ -158,10 +166,13 @@ class Store:
 
     # -- Load operations (cache + db) --
 
-    async def _get_text_asset(self, asset_id: UUID) -> assets.TextAsset | None:
+    async def _get_system_prompt(self, asset_id: UUID) -> assets.SystemPrompt | None:
         cached = self._get_cached(asset_id)
         if cached is not None:
-            return cached if isinstance(cached, assets.TextAsset) else None
+            return cached if isinstance(cached, assets.SystemPrompt) else None
+
+        if self._pool is None:
+            return None
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -169,7 +180,7 @@ class Store:
                 asset_id,
             )
             if row:
-                asset = assets.TextAsset(
+                asset = assets.SystemPrompt(
                     id=row["id"],
                     created_at=row["created_at"],
                     content=row["content"],
@@ -182,6 +193,9 @@ class Store:
         cached = self._get_cached(message_id)
         if cached is not None:
             return cached if isinstance(cached, messages.Message) else None
+
+        if self._pool is None:
+            return None
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -226,7 +240,7 @@ class Store:
             else:
                 to_load.append(mid)
 
-        if to_load:
+        if to_load and self._pool is not None:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     """SELECT id, created_at, role, content, tool_calls, tool_call_id,
@@ -255,12 +269,20 @@ class Store:
                 self._cache_asset(msg)
                 msgs_by_id[msg.id] = msg
 
-        return [msgs_by_id[mid] for mid in message_ids if mid in msgs_by_id]
+        # Verify all messages were found
+        for mid in message_ids:
+            if mid not in msgs_by_id:
+                raise exc.MessageNotFoundError(mid)
+
+        return [msgs_by_id[mid] for mid in message_ids]
 
     async def _get_conversation(self, conversation_id: UUID) -> messages.Conversation | None:
         cached = self._get_cached(conversation_id)
         if cached is not None:
             return cached if isinstance(cached, messages.Conversation) else None
+
+        if self._pool is None:
+            return None
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -281,6 +303,9 @@ class Store:
         cached = self._get_cached(agent_id)
         if cached is not None:
             return cached if isinstance(cached, ImmAgent) else None
+
+        if self._pool is None:
+            return None
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -362,7 +387,7 @@ class Store:
                     asset.input_tokens,
                     asset.output_tokens,
                 )
-            case assets.TextAsset():
+            case assets.SystemPrompt():
                 await conn.execute(
                     """
                     INSERT INTO text_assets (id, created_at, content)
@@ -382,6 +407,8 @@ class Store:
         All assets are saved in a single transaction.
         When saving an ImmAgent, its dependencies (system prompt, conversation)
         are automatically saved first if they're in the cache.
+
+        For in-memory stores (no pool), only caches the assets.
         """
         if not assets_to_save:
             return
@@ -418,12 +445,14 @@ class Store:
             all_assets.append(asset)
             seen.add(asset.id)
 
-        async with self._pool.acquire() as conn:
-            async with conn.transaction():
-                for asset in all_assets:
-                    await self._save_one(conn, asset)
+        # Write to database if we have a pool
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    for asset in all_assets:
+                        await self._save_one(conn, asset)
 
-        # Also cache them
+        # Always cache them
         self._cache_all(*all_assets)
 
     # -- Public API --
@@ -433,7 +462,7 @@ class Store:
         *,
         name: str,
         system_prompt: str,
-        model: str | llm.Model,
+        model: str,
     ) -> ImmAgent:
         """Create a new agent with an empty conversation.
 
@@ -442,23 +471,34 @@ class Store:
         Args:
             name: Human-readable name for the agent
             system_prompt: The system prompt content
-            model: LiteLLM model string or Model enum
+            model: LiteLLM model string (e.g., Model.CLAUDE_3_5_HAIKU)
 
         Returns:
             The new agent
+
+        Raises:
+            ValidationError: If any input is invalid
         """
-        prompt_asset = assets.TextAsset.create(system_prompt)
+        # Validate inputs
+        if not name or not name.strip():
+            raise exc.ValidationError("name", "must not be empty")
+        if not system_prompt or not system_prompt.strip():
+            raise exc.ValidationError("system_prompt", "must not be empty")
+        if not model or not model.strip():
+            raise exc.ValidationError("model", "must not be empty")
+
+        prompt_asset = assets.SystemPrompt.create(system_prompt)
         conversation = messages.Conversation.create()
-        model_str = model.value if isinstance(model, llm.Model) else model
-        agent, _ = ImmAgent._create(
+        model_str = model
+        agent = ImmAgent._create(
             name=name,
-            system_prompt=prompt_asset,
+            system_prompt_id=prompt_asset.id,
+            conversation_id=conversation.id,
             model=model_str,
             store=self,
-            conversation=conversation,
         )
 
-        # Cache first (save() looks up dependencies in cache)
+        # Cache first (_save() looks up dependencies in cache)
         self._cache_all(prompt_asset, conversation, agent)
 
         # Save to database
@@ -491,8 +531,9 @@ class Store:
         Args:
             agent: The agent to delete
         """
-        async with self._pool.acquire() as conn:
-            await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
 
         with self._lock:
             self._cache.pop(agent.id, None)
@@ -503,37 +544,45 @@ class Store:
         Deletes conversations, messages, and text_assets that are no longer
         referenced by any agent. Safe to call anytime.
 
+        No-op for in-memory stores.
+
         Returns:
             Dict with counts of deleted assets by type.
         """
+        if self._pool is None:
+            return {"text_assets": 0, "conversations": 0, "messages": 0}
+
         async with self._pool.acquire() as conn:
             # Delete orphaned text_assets (system prompts not used by any agent)
-            result = await conn.execute("""
+            deleted = await conn.fetch("""
                 DELETE FROM text_assets
                 WHERE id NOT IN (SELECT system_prompt_id FROM agents)
+                RETURNING id
             """)
-            text_assets = int(result.split()[-1])
+            text_assets_count = len(deleted)
 
             # Delete orphaned conversations
-            result = await conn.execute("""
+            deleted = await conn.fetch("""
                 DELETE FROM conversations
                 WHERE id NOT IN (SELECT conversation_id FROM agents)
+                RETURNING id
             """)
-            conversations = int(result.split()[-1])
+            conversations_count = len(deleted)
 
             # Delete orphaned messages
-            result = await conn.execute("""
+            deleted = await conn.fetch("""
                 DELETE FROM messages
                 WHERE id NOT IN (
                     SELECT unnest(message_ids) FROM conversations
                 )
+                RETURNING id
             """)
-            messages = int(result.split()[-1])
+            messages_count = len(deleted)
 
         return {
-            "text_assets": text_assets,
-            "conversations": conversations,
-            "messages": messages,
+            "text_assets": text_assets_count,
+            "conversations": conversations_count,
+            "messages": messages_count,
         }
 
     async def _advance(
@@ -550,6 +599,16 @@ class Store:
 
         Use agent.advance() instead.
         """
+        # Validate inputs
+        if not user_input or not user_input.strip():
+            raise exc.ValidationError("user_input", "must not be empty")
+        if max_tool_rounds < 1:
+            raise exc.ValidationError("max_tool_rounds", "must be at least 1")
+        if max_retries < 0:
+            raise exc.ValidationError("max_retries", "must be non-negative")
+        if timeout is not None and timeout <= 0:
+            raise exc.ValidationError("timeout", "must be positive")
+
         logger.info(
             "Advancing agent: id=%s, name=%s, model=%s",
             agent.id,
@@ -562,7 +621,7 @@ class Store:
         if conversation is None:
             raise exc.ConversationNotFoundError(agent.conversation_id)
 
-        system_prompt = await self._get_text_asset(agent.system_prompt_id)
+        system_prompt = await self._get_system_prompt(agent.system_prompt_id)
         if system_prompt is None:
             raise exc.SystemPromptNotFoundError(agent.system_prompt_id)
 
@@ -601,7 +660,10 @@ class Store:
 
             # Execute tool calls concurrently
             async def execute_one(tc: messages.ToolCall) -> messages.Message:
-                result = await mcp.execute(tc.name, tc.arguments)
+                try:
+                    result = await mcp.execute(tc.name, tc.arguments)
+                except exc.ToolExecutionError as e:
+                    result = f"Error: {e}"
                 return messages.Message.tool_result(tc.id, result)
 
             tool_results = await asyncio.gather(
@@ -680,3 +742,23 @@ class Store:
 
         lineage.reverse()
         return lineage
+
+
+class MemoryStore(Store):
+    """In-memory store with no database persistence.
+
+    Agents exist only while referenced. Useful for experimentation,
+    testing, or stateless use cases.
+
+    Usage:
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="Bot",
+                system_prompt="You are helpful.",
+                model=Model.CLAUDE_3_5_HAIKU,
+            )
+            agent = await agent.advance("Hello!")
+    """
+
+    def __init__(self) -> None:
+        super().__init__(pool=None)

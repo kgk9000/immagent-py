@@ -1,19 +1,20 @@
 """LLM integration via LiteLLM."""
 
 import time
-from enum import Enum
 from typing import Any
 
 import litellm
 
+import immagent.exceptions as exc
 import immagent.messages as messages
 from immagent.logging import logger
 
 
-class Model(str, Enum):
-    """Common LLM models supported via LiteLLM.
+class Model:
+    """Common LLM model strings for convenience.
 
-    This is a curated list for convenience. Any LiteLLM model string works.
+    These are just string constants — any LiteLLM model string works directly.
+    See https://docs.litellm.ai/docs/providers for all supported models.
     """
 
     # Anthropic
@@ -75,7 +76,11 @@ async def complete(
     )
     start_time = time.perf_counter()
 
-    response = await litellm.acompletion(**kwargs)
+    try:
+        response = await litellm.acompletion(**kwargs)
+    except Exception as e:
+        raise exc.LLMError(f"LLM call failed: {e}") from e
+
     choice = response.choices[0].message  # type: ignore[union-attr]
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000

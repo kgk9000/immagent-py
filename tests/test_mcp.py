@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import immagent
 from immagent.mcp import MCPManager, tool_to_openai_format
 
 
@@ -69,13 +70,14 @@ class TestMCPManager:
         assert manager.get_all_tools() == []
 
     async def test_execute_unknown_tool(self):
-        """execute returns error for unknown tool."""
+        """execute raises ToolExecutionError for unknown tool."""
         manager = MCPManager()
 
-        result = await manager.execute("unknown_tool", "{}")
+        with pytest.raises(immagent.ToolExecutionError) as exc_info:
+            await manager.execute("unknown_tool", "{}")
 
-        assert "Error" in result
-        assert "unknown_tool" in result
+        assert exc_info.value.tool_name == "unknown_tool"
+        assert "Unknown tool" in str(exc_info.value)
 
 
 # Check if weather token is available for integration tests

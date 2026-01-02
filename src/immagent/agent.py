@@ -23,7 +23,7 @@ class ImmAgent(assets.Asset):
 
     Attributes:
         name: Human-readable name for the agent
-        system_prompt_id: UUID of the TextAsset containing the system prompt
+        system_prompt_id: UUID of the SystemPrompt asset
         parent_id: UUID of the previous agent state (None for initial agent)
         conversation_id: UUID of the Conversation asset
         model: LiteLLM model string (e.g., "anthropic/claude-sonnet-4-20250514")
@@ -39,28 +39,28 @@ class ImmAgent(assets.Asset):
     @classmethod
     def _create(
         cls,
+        *,
         name: str,
-        system_prompt: assets.TextAsset,
+        system_prompt_id: UUID,
+        conversation_id: UUID,
         model: str,
         store: Store,
-        conversation: messages.Conversation | None = None,
-    ) -> tuple[ImmAgent, messages.Conversation]:
-        """Create a new agent with an empty conversation.
+    ) -> ImmAgent:
+        """Create a new agent (internal).
 
-        Returns both the agent and the conversation asset for persistence.
+        Takes IDs of pre-created dependencies. Caller is responsible for
+        creating and persisting the system prompt and conversation.
         """
-        conv = conversation or messages.Conversation.create()
-        agent = cls(
+        return cls(
             id=assets.new_id(),
             created_at=assets.now(),
             name=name,
-            system_prompt_id=system_prompt.id,
+            system_prompt_id=system_prompt_id,
             parent_id=None,
-            conversation_id=conv.id,
+            conversation_id=conversation_id,
             model=model,
             _store=store,
         )
-        return agent, conv
 
     def evolve(
         self,

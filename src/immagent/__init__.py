@@ -10,12 +10,16 @@ from immagent.exceptions import (
     AssetNotFoundError,
     ConversationNotFoundError,
     ImmAgentError,
+    LLMError,
+    MessageNotFoundError,
     SystemPromptNotFoundError,
+    ToolExecutionError,
+    ValidationError,
 )
 from immagent.llm import Model
 from immagent.mcp import MCPManager
 from immagent.messages import Message
-from immagent.store import Store
+from immagent.store import MemoryStore, Store
 
 __all__ = [
     # Core types
@@ -23,6 +27,7 @@ __all__ = [
     "Message",
     # Store (main interface)
     "Store",
+    "MemoryStore",
     # MCP
     "MCPManager",
     # Models
@@ -33,4 +38,8 @@ __all__ = [
     "ConversationNotFoundError",
     "SystemPromptNotFoundError",
     "AgentNotFoundError",
+    "MessageNotFoundError",
+    "LLMError",
+    "ToolExecutionError",
+    "ValidationError",
 ]

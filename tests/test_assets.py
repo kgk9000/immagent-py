@@ -1,35 +1,36 @@
 """Tests for asset persistence and retrieval."""
 
-from immagent import Store
+from immagent import MemoryStore, Store
 from immagent.agent import ImmAgent
-from immagent.assets import TextAsset
+from immagent.assets import SystemPrompt
+from immagent.llm import Model
 from immagent.messages import Conversation, Message, ToolCall
 
 
-class TestTextAsset:
+class TestSystemPrompt:
     async def test_save_and_load(self, store: Store):
-        """TextAsset can be saved and loaded."""
-        asset = TextAsset.create("Hello, world!")
+        """SystemPrompt can be saved and loaded."""
+        asset = SystemPrompt.create("Hello, world!")
 
         await store._save(asset)
         # Clear cache to force db load
         store.clear_cache()
-        loaded = await store._get_text_asset(asset.id)
+        loaded = await store._get_system_prompt(asset.id)
 
         assert loaded is not None
         assert loaded.id == asset.id
         assert loaded.content == "Hello, world!"
 
     async def test_cache_hit(self, store: Store):
-        """TextAsset is cached after first load."""
-        asset = TextAsset.create("Cached content")
+        """SystemPrompt is cached after first load."""
+        asset = SystemPrompt.create("Cached content")
         await store._save(asset)
         store.clear_cache()
 
         # First load - from DB
-        loaded1 = await store._get_text_asset(asset.id)
+        loaded1 = await store._get_system_prompt(asset.id)
         # Second load - from cache
-        loaded2 = await store._get_text_asset(asset.id)
+        loaded2 = await store._get_system_prompt(asset.id)
 
         assert loaded1 is loaded2  # Same object reference
 
@@ -118,16 +119,18 @@ class TestConversation:
 class TestImmAgent:
     async def test_create_agent(self, store: Store):
         """Agent can be created and saved."""
-        prompt = TextAsset.create("You are helpful.")
-        await store._save(prompt)
+        prompt = SystemPrompt.create("You are helpful.")
+        conv = Conversation.create()
+        await store._save(prompt, conv)
 
-        agent, conv = ImmAgent._create(
+        agent = ImmAgent._create(
             name="TestBot",
-            system_prompt=prompt,
+            system_prompt_id=prompt.id,
+            conversation_id=conv.id,
             model="anthropic/claude-sonnet-4-20250514",
             store=store,
         )
-        await store._save(conv, agent)
+        await store._save(agent)
         store.clear_cache()
 
         loaded = await store._get_agent(agent.id)
@@ -139,16 +142,18 @@ class TestImmAgent:
 
     async def test_evolve_creates_new_agent(self, store: Store):
         """evolve creates a new agent with parent link."""
-        prompt = TextAsset.create("You are helpful.")
-        await store._save(prompt)
+        prompt = SystemPrompt.create("You are helpful.")
+        conv1 = Conversation.create()
+        await store._save(prompt, conv1)
 
-        agent1, conv1 = ImmAgent._create(
+        agent1 = ImmAgent._create(
             name="TestBot",
-            system_prompt=prompt,
+            system_prompt_id=prompt.id,
+            conversation_id=conv1.id,
             model="anthropic/claude-sonnet-4-20250514",
             store=store,
         )
-        await store._save(conv1, agent1)
+        await store._save(agent1)
 
         # Evolve with new conversation
         msg = Message.user("Hello")
@@ -164,3 +169,46 @@ class TestImmAgent:
         assert agent2.conversation_id == conv2.id
         assert agent2.name == agent1.name  # Inherited
         assert agent2._store is store  # Store is preserved
+
+
+class TestMemoryStore:
+    """Tests for in-memory store (no database)."""
+
+    async def test_create_agent(self):
+        """Agent can be created in memory store."""
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=Model.CLAUDE_3_5_HAIKU,
+            )
+
+            assert agent.name == "TestBot"
+            assert agent._store is store
+
+    async def test_cache_only(self):
+        """Memory store uses only cache, no database."""
+        async with MemoryStore() as store:
+            prompt = SystemPrompt.create("Test prompt")
+            await store._save(prompt)
+
+            # Should be cached
+            loaded = await store._get_system_prompt(prompt.id)
+            assert loaded is prompt
+
+            # Clear cache - should be gone (no database fallback)
+            store.clear_cache()
+            loaded = await store._get_system_prompt(prompt.id)
+            assert loaded is None
+
+    async def test_gc_is_noop(self):
+        """gc() is a no-op for memory stores."""
+        async with MemoryStore() as store:
+            result = await store.gc()
+            assert result == {"text_assets": 0, "conversations": 0, "messages": 0}
+
+    async def test_init_schema_is_noop(self):
+        """init_schema() is a no-op for memory stores."""
+        async with MemoryStore() as store:
+            # Should not raise
+            await store.init_schema()

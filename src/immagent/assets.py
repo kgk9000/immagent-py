@@ -28,12 +28,12 @@ class Asset:
 
 
 @dataclass(frozen=True)
-class TextAsset(Asset):
-    """Immutable text content, used for system prompts and other text data."""
+class SystemPrompt(Asset):
+    """Immutable system prompt for an agent."""
 
     content: str
 
     @classmethod
-    def create(cls, content: str) -> "TextAsset":
-        """Create a new TextAsset with auto-generated ID and timestamp."""
+    def create(cls, content: str) -> "SystemPrompt":
+        """Create a new SystemPrompt with auto-generated ID and timestamp."""
         return cls(id=new_id(), created_at=now(), content=content)

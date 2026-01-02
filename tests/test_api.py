@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 import immagent
-from immagent import Store
+from immagent import MemoryStore, Store
 from immagent.messages import Conversation
 
 
@@ -227,3 +227,99 @@ class TestGetLineage:
         assert len(lineage) == 2
         assert lineage[0].id == agent1.id
         assert lineage[1].id == agent2.id
+
+
+class TestValidation:
+    """Tests for input validation."""
+
+    async def test_create_agent_empty_name(self):
+        """create_agent rejects empty name."""
+        async with MemoryStore() as store:
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await store.create_agent(
+                    name="",
+                    system_prompt="You are helpful.",
+                    model=immagent.Model.CLAUDE_3_5_HAIKU,
+                )
+            assert exc_info.value.field == "name"
+
+    async def test_create_agent_whitespace_name(self):
+        """create_agent rejects whitespace-only name."""
+        async with MemoryStore() as store:
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await store.create_agent(
+                    name="   ",
+                    system_prompt="You are helpful.",
+                    model=immagent.Model.CLAUDE_3_5_HAIKU,
+                )
+            assert exc_info.value.field == "name"
+
+    async def test_create_agent_empty_system_prompt(self):
+        """create_agent rejects empty system_prompt."""
+        async with MemoryStore() as store:
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await store.create_agent(
+                    name="TestBot",
+                    system_prompt="",
+                    model=immagent.Model.CLAUDE_3_5_HAIKU,
+                )
+            assert exc_info.value.field == "system_prompt"
+
+    async def test_create_agent_empty_model(self):
+        """create_agent rejects empty model."""
+        async with MemoryStore() as store:
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await store.create_agent(
+                    name="TestBot",
+                    system_prompt="You are helpful.",
+                    model="",
+                )
+            assert exc_info.value.field == "model"
+
+    async def test_advance_empty_input(self):
+        """advance rejects empty user_input."""
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+            )
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await agent.advance("")
+            assert exc_info.value.field == "user_input"
+
+    async def test_advance_invalid_max_tool_rounds(self):
+        """advance rejects max_tool_rounds < 1."""
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+            )
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await agent.advance("Hello", max_tool_rounds=0)
+            assert exc_info.value.field == "max_tool_rounds"
+
+    async def test_advance_invalid_max_retries(self):
+        """advance rejects negative max_retries."""
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+            )
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await agent.advance("Hello", max_retries=-1)
+            assert exc_info.value.field == "max_retries"
+
+    async def test_advance_invalid_timeout(self):
+        """advance rejects non-positive timeout."""
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+            )
+            with pytest.raises(immagent.ValidationError) as exc_info:
+                await agent.advance("Hello", timeout=0)
+            assert exc_info.value.field == "timeout"

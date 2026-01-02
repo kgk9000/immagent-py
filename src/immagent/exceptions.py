@@ -9,6 +9,14 @@ class ImmAgentError(Exception):
     pass
 
 
+class ValidationError(ImmAgentError):
+    """Raised when input validation fails."""
+
+    def __init__(self, field: str, message: str):
+        self.field = field
+        super().__init__(f"{field}: {message}")
+
+
 class AssetNotFoundError(ImmAgentError):
     """Raised when an asset cannot be found in the database or cache."""
 
@@ -26,7 +34,7 @@ class ConversationNotFoundError(AssetNotFoundError):
 
 
 class SystemPromptNotFoundError(AssetNotFoundError):
-    """Raised when a system prompt (TextAsset) cannot be found."""
+    """Raised when a system prompt cannot be found."""
 
     def __init__(self, prompt_id: UUID):
         super().__init__("System prompt", prompt_id)
@@ -37,6 +45,13 @@ class AgentNotFoundError(AssetNotFoundError):
 
     def __init__(self, agent_id: UUID):
         super().__init__("Agent", agent_id)
+
+
+class MessageNotFoundError(AssetNotFoundError):
+    """Raised when a message cannot be found."""
+
+    def __init__(self, message_id: UUID):
+        super().__init__("Message", message_id)
 
 
 class LLMError(ImmAgentError):
