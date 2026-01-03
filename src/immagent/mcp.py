@@ -159,7 +159,11 @@ class MCPManager:
             raise exc.ToolExecutionError(tool_name, "Unknown tool")
 
         server_key, _ = self._tools[tool_name]
-        session = self._sessions[server_key]
+        session = self._sessions.get(server_key)
+        if session is None:
+            raise exc.ToolExecutionError(
+                tool_name, f"Server '{server_key}' is no longer connected"
+            )
 
         try:
             args_dict = json.loads(arguments) if arguments else {}

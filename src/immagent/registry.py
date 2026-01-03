@@ -10,6 +10,8 @@ registry when they are garbage collected.
 import weakref
 from typing import TYPE_CHECKING
 
+from immagent.exceptions import AgentNotRegisteredError
+
 if TYPE_CHECKING:
     from immagent.persistent import PersistentAgent
     from immagent.store import Store
@@ -21,7 +23,7 @@ def get_store(agent: "PersistentAgent") -> "Store":
     """Get the store for an agent."""
     store = _agent_stores.get(agent)
     if store is None:
-        raise RuntimeError(f"Agent {agent.id} not associated with a store")
+        raise AgentNotRegisteredError(agent.id)
     return store
 
 

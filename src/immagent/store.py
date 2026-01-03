@@ -8,7 +8,8 @@ The Store is the main interface for working with agents. It combines:
 
 import threading
 import weakref
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
@@ -90,6 +91,8 @@ class Store:
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
         self._cache: MutableMapping[UUID, assets.Asset] = weakref.WeakValueDictionary()
+        # threading.RLock (not asyncio.Lock) because: all locked operations are sync
+        # dict ops with no await inside, and this protects against multi-threaded access
         self._lock = threading.RLock()
 
     @classmethod
@@ -324,8 +327,8 @@ class Store:
         name: str,
         system_prompt: str,
         model: str,
-        metadata: dict[str, Any] | None = None,
-        model_config: dict[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        model_config: Mapping[str, Any] | None = None,
     ) -> PersistentAgent:
         """Create a new agent with an empty conversation.
 
@@ -686,7 +689,7 @@ class Store:
         await self._save(new_agent)
         return new_agent
 
-    async def _update_metadata(self, agent: PersistentAgent, metadata: dict[str, Any]) -> PersistentAgent:
+    async def _update_metadata(self, agent: PersistentAgent, metadata: Mapping[str, Any]) -> PersistentAgent:
         """Create a new agent with updated metadata (internal).
 
         Use agent.with_metadata() instead.
@@ -699,7 +702,7 @@ class Store:
             parent_id=agent.id,
             conversation_id=agent.conversation_id,
             model=agent.model,
-            metadata=metadata,
+            metadata=MappingProxyType(dict(metadata)),
             model_config=agent.model_config,
         )
         register_agent(new_agent, self)

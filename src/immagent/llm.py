@@ -87,7 +87,12 @@ async def complete(
     except Exception as e:
         raise exc.LLMError(f"LLM call failed: {e}") from e
 
-    choice = response.choices[0].message  # type: ignore[union-attr]
+    # Check for empty response (can happen with content filtering)
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise exc.LLMError("LLM returned no choices (possibly filtered)")
+
+    choice = choices[0].message
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
     usage = getattr(response, "usage", None)

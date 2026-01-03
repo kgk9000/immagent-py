@@ -184,7 +184,7 @@ class PersistentAgent(Asset):
     model: str                  # LiteLLM model string
 ```
 
-Agents are bound to a Store and have methods for interaction:
+Agents are bound to a Store and have methods for interaction. When you create or load an agent, it's automatically registered with that Store via an internal weak-reference registry. This lets you call `agent.advance()` directly without passing the store—the agent knows which store it belongs to. When the agent is garbage collected, the binding is automatically cleaned up.
 
 ```python
 # Create via store (auto-saved)

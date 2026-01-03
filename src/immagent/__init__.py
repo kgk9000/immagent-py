@@ -7,6 +7,7 @@ creates a new agent with a fresh UUID4.
 from immagent.assets import SystemPrompt
 from immagent.exceptions import (
     AgentNotFoundError,
+    AgentNotRegisteredError,
     AssetNotFoundError,
     ImmAgentError,
     LLMError,
@@ -38,6 +39,7 @@ __all__ = [
     "ImmAgentError",
     "AssetNotFoundError",
     "AgentNotFoundError",
+    "AgentNotRegisteredError",
     "MessageNotFoundError",
     "LLMError",
     "ToolExecutionError",
