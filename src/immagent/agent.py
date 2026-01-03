@@ -8,6 +8,7 @@ from uuid import UUID
 
 import immagent.assets as assets
 import immagent.messages as messages
+from immagent.registry import get_store, register_agent
 
 if TYPE_CHECKING:
     from immagent.mcp import MCPManager
@@ -76,8 +77,6 @@ class ImmAgent(assets.Asset):
         The new agent links back to this one via parent_id.
         Metadata and model_config are inherited from the current agent.
         """
-        from immagent.store import _get_store, _register_agent
-
         new_agent = ImmAgent(
             id=assets.new_id(),
             created_at=assets.now(),
@@ -90,7 +89,7 @@ class ImmAgent(assets.Asset):
             model_config=self.model_config,
         )
         # Register new agent with the same store as the parent
-        _register_agent(new_agent.id, _get_store(self.id))
+        register_agent(new_agent.id, get_store(self.id))
         return new_agent
 
     async def with_metadata(self, metadata: dict[str, Any]) -> ImmAgent:
@@ -105,9 +104,7 @@ class ImmAgent(assets.Asset):
         Returns:
             A new agent with updated metadata
         """
-        from immagent.store import _get_store
-
-        return await _get_store(self.id)._update_metadata(self, metadata)
+        return await get_store(self.id)._update_metadata(self, metadata)
 
     async def advance(
         self,
@@ -136,9 +133,7 @@ class ImmAgent(assets.Asset):
             max_tokens: Override max_tokens for this call (default: use agent's model_config)
             top_p: Override top_p for this call (default: use agent's model_config)
         """
-        from immagent.store import _get_store
-
-        return await _get_store(self.id)._advance(
+        return await get_store(self.id)._advance(
             self,
             user_input,
             mcp=mcp,
@@ -152,15 +147,11 @@ class ImmAgent(assets.Asset):
 
     async def get_messages(self) -> list[messages.Message]:
         """Get all messages in this agent's conversation."""
-        from immagent.store import _get_store
-
-        return await _get_store(self.id)._get_agent_messages(self)
+        return await get_store(self.id)._get_agent_messages(self)
 
     async def get_lineage(self) -> list[ImmAgent]:
         """Get the chain of agents from root to this agent."""
-        from immagent.store import _get_store
-
-        return await _get_store(self.id)._get_agent_lineage(self)
+        return await get_store(self.id)._get_agent_lineage(self)
 
     async def clone(self) -> ImmAgent:
         """Create a clone of this agent for branching.
@@ -168,9 +159,7 @@ class ImmAgent(assets.Asset):
         The clone shares the same parent, conversation, and system prompt,
         allowing you to advance it in a different direction.
         """
-        from immagent.store import _get_store
-
-        return await _get_store(self.id)._clone_agent(self)
+        return await get_store(self.id)._clone_agent(self)
 
     async def get_token_usage(self) -> tuple[int, int]:
         """Get total token usage for this agent's conversation.

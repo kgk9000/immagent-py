@@ -23,22 +23,7 @@ import immagent.mcp as mcp_mod
 import immagent.messages as messages
 from immagent.agent import ImmAgent
 from immagent.logging import logger
-
-# Registry mapping agent IDs to their stores
-_agent_stores: dict[UUID, "Store"] = {}
-
-
-def _get_store(agent_id: UUID) -> "Store":
-    """Get the store for an agent by ID."""
-    store = _agent_stores.get(agent_id)
-    if store is None:
-        raise RuntimeError(f"Agent {agent_id} not associated with a store")
-    return store
-
-
-def _register_agent(agent_id: UUID, store: "Store") -> None:
-    """Register an agent with its store."""
-    _agent_stores[agent_id] = store
+from immagent.registry import register_agent
 
 SCHEMA = """
 -- Text assets (system prompts, etc.)
@@ -217,7 +202,7 @@ class Store:
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             model_config=json.loads(row["model_config"]) if row["model_config"] else {},
         )
-        _register_agent(agent.id, self)
+        register_agent(agent.id, self)
         return agent
 
     def _get_or_build_agent(self, row: asyncpg.Record) -> ImmAgent:
@@ -527,7 +512,7 @@ class Store:
         )
 
         # Register agent with this store
-        _register_agent(agent.id, self)
+        register_agent(agent.id, self)
 
         # Cache first (_save() looks up dependencies in cache)
         self._cache_all(prompt_asset, conversation, agent)
@@ -893,11 +878,8 @@ class Store:
         # Create new conversation with all message IDs
         new_conversation = conversation.with_messages(*[m.id for m in new_messages])
 
-        # Create new agent state
+        # Create new agent state (also registers with this store)
         new_agent = agent._evolve(new_conversation)
-
-        # Register new agent with this store
-        _register_agent(new_agent.id, self)
 
         # Cache new assets first (save() looks up dependencies in cache)
         self._cache_all(*new_messages, new_conversation, new_agent)
@@ -942,7 +924,7 @@ class Store:
             metadata=agent.metadata,
             model_config=agent.model_config,
         )
-        _register_agent(new_agent.id, self)
+        register_agent(new_agent.id, self)
         self._cache_asset(new_agent)
         await self._save(new_agent)
         return new_agent
@@ -963,7 +945,7 @@ class Store:
             metadata=metadata,
             model_config=agent.model_config,
         )
-        _register_agent(new_agent.id, self)
+        register_agent(new_agent.id, self)
         self._cache_asset(new_agent)
         await self._save(new_agent)
         return new_agent

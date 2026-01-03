@@ -119,7 +119,7 @@ class TestConversation:
 class TestImmAgent:
     async def test_create_agent(self, store: Store):
         """Agent can be created and saved."""
-        from immagent.store import _register_agent
+        from immagent.registry import register_agent
 
         prompt = SystemPrompt.create("You are helpful.")
         conv = Conversation.create()
@@ -131,7 +131,7 @@ class TestImmAgent:
             conversation_id=conv.id,
             model="anthropic/claude-sonnet-4-20250514",
         )
-        _register_agent(agent.id, store)
+        register_agent(agent.id, store)
         await store._save(agent)
         store.clear_cache()
 
@@ -144,7 +144,7 @@ class TestImmAgent:
 
     async def test_evolve_creates_new_agent(self, store: Store):
         """_evolve creates a new agent with parent link."""
-        from immagent.store import _register_agent
+        from immagent.registry import register_agent
 
         prompt = SystemPrompt.create("You are helpful.")
         conv1 = Conversation.create()
@@ -156,7 +156,7 @@ class TestImmAgent:
             conversation_id=conv1.id,
             model="anthropic/claude-sonnet-4-20250514",
         )
-        _register_agent(agent1.id, store)
+        register_agent(agent1.id, store)
         await store._save(agent1)
 
         # Evolve with new conversation
@@ -179,7 +179,7 @@ class TestMemoryStore:
 
     async def test_create_agent(self):
         """Agent can be created in memory store."""
-        from immagent.store import _get_store
+        from immagent.registry import get_store
 
         async with MemoryStore() as store:
             agent = await store.create_agent(
@@ -189,7 +189,7 @@ class TestMemoryStore:
             )
 
             assert agent.name == "TestBot"
-            assert _get_store(agent.id) is store
+            assert get_store(agent.id) is store
 
     async def test_cache_only(self):
         """Memory store uses only cache, no database."""
