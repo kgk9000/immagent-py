@@ -150,9 +150,10 @@ class Message(assets.Asset):
 
 @dataclass(frozen=True)
 class Conversation(assets.Asset):
-    """An immutable conversation, which is an ordered list of message IDs.
+    """Internal: ordered list of message IDs for an agent.
 
-    New messages create a new Conversation with a new ID.
+    Users interact with messages via agent.get_messages(), not directly
+    with Conversation objects. Not part of the public API.
     """
 
     message_ids: tuple[UUID, ...]

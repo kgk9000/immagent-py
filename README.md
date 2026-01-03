@@ -170,7 +170,6 @@ class Asset:
 Asset types:
 - `SystemPrompt` — the agent's system prompt
 - `Message` — user, assistant, or tool messages
-- `Conversation` — ordered list of message IDs
 - `PersistentAgent` — the agent itself
 
 ### PersistentAgent
@@ -341,10 +340,8 @@ except immagent.ValidationError as e:
 
 try:
     agent = await agent.advance("Hello")
-except immagent.ConversationNotFoundError as e:
-    print(f"Conversation {e.asset_id} not found")
-except immagent.SystemPromptNotFoundError as e:
-    print(f"System prompt {e.asset_id} not found")
+except immagent.LLMError as e:
+    print(f"LLM call failed: {e}")
 except immagent.ImmAgentError as e:
     print(f"Agent error: {e}")
 ```
@@ -353,8 +350,6 @@ Exception hierarchy:
 - `ImmAgentError` — base exception
   - `ValidationError` — input validation failed
   - `AssetNotFoundError` — asset lookup failed
-    - `ConversationNotFoundError`
-    - `SystemPromptNotFoundError`
     - `AgentNotFoundError`
     - `MessageNotFoundError`
   - `LLMError` — LLM call failed

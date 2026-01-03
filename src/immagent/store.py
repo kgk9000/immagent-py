@@ -23,9 +23,6 @@ from immagent.persistent import PersistentAgent
 from immagent.logging import logger
 from immagent.registry import register_agent
 
-# Column list for agent queries (must match PersistentAgent.from_row expectations)
-_AGENT_COLS = "id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config"
-
 SCHEMA = """
 -- Text assets (system prompts, etc.)
 CREATE TABLE IF NOT EXISTS text_assets (
@@ -426,7 +423,7 @@ class Store:
         if to_load:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
-                    f"SELECT {_AGENT_COLS} FROM agents WHERE id = ANY($1)",
+                    f"SELECT {PersistentAgent.COLUMNS} FROM agents WHERE id = ANY($1)",
                     to_load,
                 )
             for row in rows:
@@ -477,7 +474,7 @@ class Store:
         """
         if name:
             query = f"""
-                SELECT {_AGENT_COLS} FROM agents
+                SELECT {PersistentAgent.COLUMNS} FROM agents
                 WHERE name ILIKE $1
                 ORDER BY created_at DESC
                 LIMIT $2 OFFSET $3
@@ -485,7 +482,7 @@ class Store:
             args = (f"%{name}%", limit, offset)
         else:
             query = f"""
-                SELECT {_AGENT_COLS} FROM agents
+                SELECT {PersistentAgent.COLUMNS} FROM agents
                 ORDER BY created_at DESC
                 LIMIT $1 OFFSET $2
             """
@@ -527,7 +524,7 @@ class Store:
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                f"SELECT {_AGENT_COLS} FROM agents WHERE name = $1 ORDER BY created_at DESC",
+                f"SELECT {PersistentAgent.COLUMNS} FROM agents WHERE name = $1 ORDER BY created_at DESC",
                 name,
             )
 

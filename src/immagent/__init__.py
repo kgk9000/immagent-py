@@ -16,7 +16,7 @@ from immagent.exceptions import (
 )
 from immagent.llm import Model
 from immagent.mcp import MCPManager
-from immagent.messages import Conversation, Message, ToolCall
+from immagent.messages import Message, ToolCall
 from immagent.persistent import PersistentAgent
 from immagent.simple import SimpleAgent
 from immagent.store import Store
@@ -26,7 +26,6 @@ __all__ = [
     "SimpleAgent",
     "PersistentAgent",
     "Message",
-    "Conversation",
     "ToolCall",
     "SystemPrompt",
     # Store (main interface)

@@ -45,11 +45,8 @@ class PersistentAgent(assets.Asset):
     model_config: dict[str, Any] = field(default_factory=dict)
 
     TABLE: ClassVar[str] = "agents"
-    SELECT_SQL: ClassVar[str] = """
-        SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id,
-               model, metadata, model_config
-        FROM agents WHERE id = $1
-    """
+    COLUMNS: ClassVar[str] = "id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config"
+    SELECT_SQL: ClassVar[str] = f"SELECT {COLUMNS} FROM agents WHERE id = $1"
 
     def __hash__(self) -> int:
         return hash(self.id)
