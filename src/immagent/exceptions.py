@@ -27,14 +27,20 @@ class AssetNotFoundError(ImmAgentError):
 
 
 class ConversationNotFoundError(AssetNotFoundError):
-    """Raised when a conversation cannot be found."""
+    """Internal error: agent's conversation is missing.
+
+    This indicates database corruption or a bug. Not part of the public API.
+    """
 
     def __init__(self, conversation_id: UUID):
         super().__init__("Conversation", conversation_id)
 
 
 class SystemPromptNotFoundError(AssetNotFoundError):
-    """Raised when a system prompt cannot be found."""
+    """Internal error: agent's system prompt is missing.
+
+    This indicates database corruption or a bug. Not part of the public API.
+    """
 
     def __init__(self, prompt_id: UUID):
         super().__init__("System prompt", prompt_id)

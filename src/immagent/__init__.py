@@ -8,11 +8,9 @@ from immagent.assets import SystemPrompt
 from immagent.exceptions import (
     AgentNotFoundError,
     AssetNotFoundError,
-    ConversationNotFoundError,
     ImmAgentError,
     LLMError,
     MessageNotFoundError,
-    SystemPromptNotFoundError,
     ToolExecutionError,
     ValidationError,
 )
@@ -40,8 +38,6 @@ __all__ = [
     # Exceptions
     "ImmAgentError",
     "AssetNotFoundError",
-    "ConversationNotFoundError",
-    "SystemPromptNotFoundError",
     "AgentNotFoundError",
     "MessageNotFoundError",
     "LLMError",
