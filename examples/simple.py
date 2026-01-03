@@ -39,7 +39,7 @@ async def main():
         print(f"  {msg.role}: {msg.content}")
 
     # Get total token usage
-    input_tokens, output_tokens = agent.get_token_usage()
+    input_tokens, output_tokens = await agent.get_token_usage()
     print(f"\nToken usage: {input_tokens} input, {output_tokens} output")
 
     # Get last response
