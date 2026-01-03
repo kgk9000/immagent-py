@@ -1,35 +1,36 @@
 """Tests for asset persistence and retrieval."""
 
-from immagent import Store
-from immagent.agent import ImmAgent
-from immagent.assets import TextAsset
+from immagent import MemoryStore, Store
+from immagent.persistent import PersistentAgent
+from immagent.assets import SystemPrompt
+from immagent.llm import Model
 from immagent.messages import Conversation, Message, ToolCall
 
 
-class TestTextAsset:
+class TestSystemPrompt:
     async def test_save_and_load(self, store: Store):
-        """TextAsset can be saved and loaded."""
-        asset = TextAsset.create("Hello, world!")
+        """SystemPrompt can be saved and loaded."""
+        asset = SystemPrompt.create("Hello, world!")
 
-        await store.save(asset)
+        await store._save(asset)
         # Clear cache to force db load
         store.clear_cache()
-        loaded = await store._get_text_asset(asset.id)
+        loaded = await store._get_system_prompt(asset.id)
 
         assert loaded is not None
         assert loaded.id == asset.id
         assert loaded.content == "Hello, world!"
 
     async def test_cache_hit(self, store: Store):
-        """TextAsset is cached after first load."""
-        asset = TextAsset.create("Cached content")
-        await store.save(asset)
+        """SystemPrompt is cached after first load."""
+        asset = SystemPrompt.create("Cached content")
+        await store._save(asset)
         store.clear_cache()
 
         # First load - from DB
-        loaded1 = await store._get_text_asset(asset.id)
+        loaded1 = await store._get_system_prompt(asset.id)
         # Second load - from cache
-        loaded2 = await store._get_text_asset(asset.id)
+        loaded2 = await store._get_system_prompt(asset.id)
 
         assert loaded1 is loaded2  # Same object reference
 
@@ -39,7 +40,7 @@ class TestMessage:
         """User message can be saved and loaded."""
         msg = Message.user("What's the weather?")
 
-        await store.save(msg)
+        await store._save(msg)
         store.clear_cache()
         loaded = await store._get_message(msg.id)
 
@@ -54,7 +55,7 @@ class TestMessage:
         )
         msg = Message.assistant("Let me check the weather.", tool_calls=tool_calls)
 
-        await store.save(msg)
+        await store._save(msg)
         store.clear_cache()
         loaded = await store._get_message(msg.id)
 
@@ -68,7 +69,7 @@ class TestMessage:
         """Tool result message persists correctly."""
         msg = Message.tool_result("call_123", "Sunny, 72°F")
 
-        await store.save(msg)
+        await store._save(msg)
         store.clear_cache()
         loaded = await store._get_message(msg.id)
 
@@ -83,7 +84,7 @@ class TestConversation:
         """Empty conversation can be saved and loaded."""
         conv = Conversation.create()
 
-        await store.save(conv)
+        await store._save(conv)
         store.clear_cache()
         loaded = await store._get_conversation(conv.id)
 
@@ -94,10 +95,10 @@ class TestConversation:
         """Conversation preserves message order."""
         msg1 = Message.user("Hello")
         msg2 = Message.assistant("Hi there!")
-        await store.save(msg1, msg2)
+        await store._save(msg1, msg2)
 
         conv = Conversation.create((msg1.id, msg2.id))
-        await store.save(conv)
+        await store._save(conv)
         store.clear_cache()
         loaded = await store._get_conversation(conv.id)
 
@@ -115,19 +116,23 @@ class TestConversation:
         assert conv2.message_ids == (msg.id,)
 
 
-class TestImmAgent:
+class TestPersistentAgent:
     async def test_create_agent(self, store: Store):
         """Agent can be created and saved."""
-        prompt = TextAsset.create("You are helpful.")
-        await store.save(prompt)
+        from immagent.registry import register_agent
 
-        agent, conv = ImmAgent._create(
+        prompt = SystemPrompt.create("You are helpful.")
+        conv = Conversation.create()
+        await store._save(prompt, conv)
+
+        agent = PersistentAgent._create(
             name="TestBot",
-            system_prompt=prompt,
+            system_prompt_id=prompt.id,
+            conversation_id=conv.id,
             model="anthropic/claude-sonnet-4-20250514",
-            store=store,
         )
-        await store.save(conv, agent)
+        register_agent(agent, store)
+        await store._save(agent)
         store.clear_cache()
 
         loaded = await store._get_agent(agent.id)
@@ -138,29 +143,77 @@ class TestImmAgent:
         assert loaded.parent_id is None
 
     async def test_evolve_creates_new_agent(self, store: Store):
-        """evolve creates a new agent with parent link."""
-        prompt = TextAsset.create("You are helpful.")
-        await store.save(prompt)
+        """_evolve creates a new agent with parent link."""
+        from immagent.registry import register_agent
 
-        agent1, conv1 = ImmAgent._create(
+        prompt = SystemPrompt.create("You are helpful.")
+        conv1 = Conversation.create()
+        await store._save(prompt, conv1)
+
+        agent1 = PersistentAgent._create(
             name="TestBot",
-            system_prompt=prompt,
+            system_prompt_id=prompt.id,
+            conversation_id=conv1.id,
             model="anthropic/claude-sonnet-4-20250514",
-            store=store,
         )
-        await store.save(conv1, agent1)
+        register_agent(agent1, store)
+        await store._save(agent1)
 
         # Evolve with new conversation
         msg = Message.user("Hello")
-        await store.save(msg)
+        await store._save(msg)
         conv2 = conv1.with_messages(msg.id)
-        await store.save(conv2)
+        await store._save(conv2)
 
-        agent2 = agent1.evolve(conv2)
-        await store.save(agent2)
+        agent2 = agent1._evolve(conv2)
+        await store._save(agent2)
 
         assert agent2.id != agent1.id
         assert agent2.parent_id == agent1.id
         assert agent2.conversation_id == conv2.id
         assert agent2.name == agent1.name  # Inherited
-        assert agent2._store is store  # Store is preserved
+
+
+class TestMemoryStore:
+    """Tests for in-memory store (no database)."""
+
+    async def test_create_agent(self):
+        """Agent can be created in memory store."""
+        from immagent.registry import get_store
+
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="TestBot",
+                system_prompt="You are helpful.",
+                model=Model.CLAUDE_3_5_HAIKU,
+            )
+
+            assert agent.name == "TestBot"
+            assert get_store(agent) is store
+
+    async def test_cache_only(self):
+        """Memory store uses only cache, no database."""
+        async with MemoryStore() as store:
+            prompt = SystemPrompt.create("Test prompt")
+            await store._save(prompt)
+
+            # Should be cached
+            loaded = await store._get_system_prompt(prompt.id)
+            assert loaded is prompt
+
+            # Clear cache - should be gone (no database fallback)
+            store.clear_cache()
+            loaded = await store._get_system_prompt(prompt.id)
+            assert loaded is None
+
+    async def test_gc_is_noop(self):
+        """gc() is a no-op for memory stores."""
+        async with MemoryStore() as store:
+            result = await store.gc()
+            assert result == {"text_assets": 0, "conversations": 0, "messages": 0}
+
+    async def test_init_schema_is_noop(self):
+        """init_schema() is a no-op for memory stores."""
+        async with MemoryStore() as store:
+            # Should not raise
+            await store.init_schema()

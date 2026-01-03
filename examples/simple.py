@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Simple non-interactive example.
+"""Simple agent example - no database, no UUIDs, just chat.
+
+This demonstrates SimpleAgent for quick scripts and experimentation.
+No Store needed, no persistence, just in-memory chat.
 
 Requires:
-    - Docker running (for automatic PostgreSQL)
-    - ANTHROPIC_API_KEY in .env
+    - ANTHROPIC_API_KEY in environment
 
 Usage:
-    make simple
+    uv run python examples/simple.py
 """
 
 import asyncio
 import os
 
-import immagent
-
-from helpers import get_store
+from immagent import SimpleAgent
 
 
 async def main():
@@ -22,32 +22,28 @@ async def main():
         print("Please set ANTHROPIC_API_KEY")
         return
 
-    async with get_store() as store:
-        # Create agent (auto-saved)
-        agent = await store.create_agent(
-            name="Calculator",
-            system_prompt="You are a calculator. Only respond with numbers.",
-            model=immagent.Model.CLAUDE_3_5_HAIKU,
-        )
-        print(f"Agent v1: {agent.id}")
+    # Create a simple agent - no store, no database
+    agent = SimpleAgent(
+        name="Calculator",
+        system_prompt="You are a calculator. Only respond with numbers.",
+        model="anthropic/claude-3-5-haiku-20241022",
+    )
 
-        # First turn (auto-saved)
-        agent = await agent.advance("What is 2 + 2?")
-        print(f"Agent v2: {agent.id}")
+    # advance() returns a new agent (same pattern as PersistentAgent)
+    agent = await agent.advance("What is 2 + 2?")
+    agent = await agent.advance("Multiply that by 10")
 
-        # Second turn (auto-saved)
-        agent = await agent.advance("Multiply that by 10")
-        print(f"Agent v3: {agent.id}")
+    # Show conversation
+    print("Conversation:")
+    for msg in agent.messages:
+        print(f"  {msg.role}: {msg.content}")
 
-        # Show conversation
-        print("\nConversation:")
-        for msg in await agent.get_messages():
-            print(f"  {msg.role}: {msg.content}")
+    # Get total token usage
+    input_tokens, output_tokens = agent.get_token_usage()
+    print(f"\nToken usage: {input_tokens} input, {output_tokens} output")
 
-        # Show lineage
-        print("\nLineage:")
-        for a in await agent.get_lineage():
-            print(f"  {a.id} (parent: {a.parent_id})")
+    # Get last response
+    print(f"\nLast response: {agent.last_response}")
 
 
 if __name__ == "__main__":

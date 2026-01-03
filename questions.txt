@@ -1,0 +1,7 @@
+Prompt for fresh Claude Code:
+
+  Review this codebase critically. Focus on:
+  1. API design - is it intuitive and consistent?
+  2. Code quality - any bugs, duplication, or unclear patterns?
+  3. What's missing that would be essential?
+  4. What's confusing or over-engineered?

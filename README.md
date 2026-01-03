@@ -4,6 +4,34 @@ An immutable agent architecture for Python. Every state transition creates a new
 
 ## Quick Start
 
+### SimpleAgent
+
+For quick scripts and experimentation—no database, no UUIDs, just chat:
+
+```python
+import asyncio
+from immagent import SimpleAgent
+
+async def main():
+    agent = SimpleAgent(
+        name="Assistant",
+        system_prompt="You are helpful.",
+        model="anthropic/claude-3-5-haiku-20241022",
+    )
+
+    agent = await agent.advance("Hello!")
+    agent = await agent.advance("What's 2+2?")
+
+    for msg in agent.messages:
+        print(f"{msg.role}: {msg.content}")
+
+asyncio.run(main())
+```
+
+### PersistentAgent
+
+For production use with full history and database persistence:
+
 ```python
 import asyncio
 import immagent
@@ -31,19 +59,35 @@ asyncio.run(main())
 
 ## Public API
 
+### SimpleAgent
+
+| Method | Description |
+|--------|-------------|
+| `SimpleAgent(name, system_prompt, model)` | Create an in-memory agent |
+| `agent.advance(input)` | Process input and return new agent |
+| `agent.messages` | Get all messages |
+| `agent.last_response` | Get last assistant response |
+| `agent.get_token_usage()` | Get (input_tokens, output_tokens) |
+
+### PersistentAgent (with Store)
+
 | Method | Description |
 |--------|-------------|
 | `Store.connect(dsn)` | Connect to PostgreSQL |
+| `MemoryStore()` | In-memory store (no database) |
 | `store.init_schema()` | Create tables if not exist |
 | `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
+| `store.list_agents()` | List agents with pagination |
+| `store.count_agents()` | Count total agents |
+| `store.find_by_name(name)` | Find agents by exact name |
 | `store.delete(agent)` | Delete an agent |
 | `store.gc()` | Remove orphaned assets |
 | `store.clear_cache()` | Clear in-memory cache |
-| `agent.advance(input)` | Call LLM and return new agent |
+| `agent.advance(input, temperature=, max_tokens=, top_p=)` | Call LLM and return new agent |
 | `agent.get_messages()` | Get conversation messages |
 | `agent.get_lineage()` | Walk agent's parent chain |
-| `agent.copy()` | Copy agent with new ID |
+| `agent.clone()` | Clone agent with new ID |
 | `immagent.Model` | Enum of common LLM models |
 | `immagent.MCPManager` | MCP tool server manager |
 
@@ -62,6 +106,18 @@ Because everything is immutable:
 - **Full history** — follow `parent_id` to trace the agent's lineage
 - **Reproducibility** — given an agent ID, you can reconstruct its exact state
 
+## Two Agent Types
+
+| | `SimpleAgent` | `PersistentAgent` |
+|---|---|---|
+| **Use case** | Quick scripts, experimentation | Production with full history |
+| **Persistence** | None (in-memory only) | PostgreSQL |
+| **API** | `advance()` returns new agent | `advance()` returns new agent |
+| **IDs** | None | UUID for every state |
+| **Lineage** | None | Full parent chain |
+
+Both use the same LLM orchestration under the hood (`advance.py`).
+
 ## Installation
 
 ```bash
@@ -71,7 +127,7 @@ uv add immagent
 Or for development:
 
 ```bash
-git clone https://github.com/youruser/immagent-py
+git clone https://github.com/kgk9000/immagent-py
 cd immagent-py
 uv sync --all-extras
 ```
@@ -101,6 +157,15 @@ store = await immagent.Store.connect(
 )
 ```
 
+For experimentation or stateless use cases, use `MemoryStore`:
+
+```python
+async with immagent.MemoryStore() as store:
+    agent = await store.create_agent(...)
+    agent = await agent.advance("Hello!")
+    # Agents exist only while referenced — no persistence
+```
+
 ### Assets
 
 Everything is an **Asset** with a UUID and timestamp:
@@ -113,18 +178,18 @@ class Asset:
 ```
 
 Asset types:
-- `TextAsset` — system prompts and other text content
+- `SystemPrompt` — the agent's system prompt
 - `Message` — user, assistant, or tool messages
 - `Conversation` — ordered list of message IDs
-- `ImmAgent` — the agent itself
+- `PersistentAgent` — the agent itself
 
-### ImmAgent
+### PersistentAgent
 
 ```python
 @dataclass(frozen=True)
-class ImmAgent(Asset):
+class PersistentAgent(Asset):
     name: str
-    system_prompt_id: UUID      # References a TextAsset
+    system_prompt_id: UUID      # References a SystemPrompt
     parent_id: UUID | None      # Previous agent state
     conversation_id: UUID       # References a Conversation
     model: str                  # LiteLLM model string
@@ -155,7 +220,7 @@ lineage = await agent.get_lineage()
 3. Call the LLM (via LiteLLM)
 4. If tool calls requested, execute via MCP and loop
 5. Create new `Conversation` with all messages
-6. Create new `ImmAgent` with `parent_id` pointing to the old agent
+6. Create new `PersistentAgent` with `parent_id` pointing to the old agent
 7. Save to database and cache
 8. Return the new agent
 
@@ -280,6 +345,11 @@ Custom exceptions for precise error handling:
 
 ```python
 try:
+    agent = await store.create_agent(name="", ...)
+except immagent.ValidationError as e:
+    print(f"Invalid {e.field}: {e}")  # "Invalid name: name: must not be empty"
+
+try:
     agent = await agent.advance("Hello")
 except immagent.ConversationNotFoundError as e:
     print(f"Conversation {e.asset_id} not found")
@@ -291,10 +361,14 @@ except immagent.ImmAgentError as e:
 
 Exception hierarchy:
 - `ImmAgentError` — base exception
+  - `ValidationError` — input validation failed
   - `AssetNotFoundError` — asset lookup failed
     - `ConversationNotFoundError`
     - `SystemPromptNotFoundError`
     - `AgentNotFoundError`
+    - `MessageNotFoundError`
+  - `LLMError` — LLM call failed
+  - `ToolExecutionError` — MCP tool execution failed
 
 ## Logging
 
@@ -375,12 +449,43 @@ make test
 ```
 src/immagent/
 ├── __init__.py     # Public API exports
-├── store.py        # Store (main interface - cache + db)
-├── agent.py        # ImmAgent dataclass with methods
-├── assets.py       # Asset base class, TextAsset
+├── advance.py      # Pure LLM orchestration (no persistence)
+├── assets.py       # Asset base class, SystemPrompt
 ├── exceptions.py   # Custom exception types
 ├── llm.py          # LiteLLM wrapper with retries/timeout
 ├── logging.py      # Logging configuration
 ├── mcp.py          # MCP client for tools
-└── messages.py     # Message, ToolCall, Conversation
+├── messages.py     # Message, ToolCall, Conversation
+├── persistent.py   # PersistentAgent dataclass
+├── registry.py     # Agent-to-store mapping (WeakKeyDictionary)
+├── simple.py       # SimpleAgent for quick scripts
+└── store.py        # Store (main interface - cache + db)
 ```
+
+## Design Decisions
+
+- **Frozen dataclasses** — Simple, Pythonic, no ORM magic
+- **Weak ref cache** — Auto-cleanup when assets are dropped, no size tuning
+- **Write-through** — Save to DB immediately, then cache; losing cache entries is safe
+- **Agent-store binding** — WeakKeyDictionary maps agents to stores; auto-cleanup when agents are garbage collected
+- **Pure advance function** — LLM orchestration is a pure function (data in, messages out); Store handles persistence around it
+- **Persistence on assets** — Each asset type knows how to serialize itself (`from_row`, `to_insert_params`)
+- **Token tracking** — `input_tokens`/`output_tokens` on assistant messages
+- **MCP for tools** — Standard protocol instead of custom tool system
+- **LiteLLM** — Multi-provider LLM support without custom abstractions
+- **Testcontainers** — Examples and tests work without manual DB setup
+
+### Why Immutability?
+
+```
+PersistentAgent ──→ Conversation ──→ [Message UUIDs] ──→ Messages
+    │
+    ├──→ SystemPrompt
+    │
+    └──→ parent_id (previous agent state)
+```
+
+- **Safe caching** — Assets never change after creation
+- **Full history** — Walk `parent_id` chain to trace lineage
+- **Efficient sharing** — Ancestors share messages via UUID references
+- **No partial state** — If `advance()` fails, original agent is unchanged

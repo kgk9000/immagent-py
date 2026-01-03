@@ -6,22 +6,22 @@ The Store is the main interface for working with agents. It combines:
 - Agent lifecycle operations (create, advance, load)
 """
 
-import asyncio
-import json
 import threading
 import weakref
+from collections.abc import MutableMapping
 from typing import Any
 from uuid import UUID
 
 import asyncpg
 
+import immagent.advance as advance_mod
 import immagent.assets as assets
 import immagent.exceptions as exc
-import immagent.llm as llm
 import immagent.mcp as mcp_mod
 import immagent.messages as messages
-from immagent.agent import ImmAgent
+from immagent.persistent import PersistentAgent
 from immagent.logging import logger
+from immagent.registry import register_agent
 
 SCHEMA = """
 -- Text assets (system prompts, etc.)
@@ -58,12 +58,15 @@ CREATE TABLE IF NOT EXISTS agents (
     system_prompt_id UUID NOT NULL REFERENCES text_assets(id),
     parent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
     conversation_id UUID NOT NULL REFERENCES conversations(id),
-    model TEXT NOT NULL
+    model TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    model_config JSONB NOT NULL DEFAULT '{}'
 );
 
 -- Indexes for common lookups
 CREATE INDEX IF NOT EXISTS idx_agents_parent_id ON agents(parent_id);
 CREATE INDEX IF NOT EXISTS idx_agents_conversation_id ON agents(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name);
 """
 
 
@@ -73,22 +76,21 @@ class Store:
     The Store manages both persistence (PostgreSQL) and caching (weak refs).
     It's the main interface for creating, loading, and advancing agents.
 
-    Usage:
+    Usage with PostgreSQL:
         async with await Store.connect("postgresql://...") as store:
             agent = await store.create_agent(
                 name="Bot",
                 system_prompt="You are helpful.",
                 model=Model.CLAUDE_3_5_HAIKU,
             )
-            agent = await store.advance(agent, "Hello!")
-            print(await store.get_messages(agent))
+            agent = await agent.advance("Hello!")
+
+    For in-memory stores without persistence, use MemoryStore instead.
     """
 
-    def __init__(self, pool: asyncpg.Pool):
+    def __init__(self, pool: asyncpg.Pool | None = None):
         self._pool = pool
-        self._cache: weakref.WeakValueDictionary[UUID, assets.Asset] = (
-            weakref.WeakValueDictionary()
-        )
+        self._cache: MutableMapping[UUID, assets.Asset] = weakref.WeakValueDictionary()
         self._lock = threading.RLock()
 
     @classmethod
@@ -121,9 +123,11 @@ class Store:
             raise RuntimeError("Failed to create database connection pool")
         return cls(pool)
 
+
     async def close(self) -> None:
-        """Close the database connection pool."""
-        await self._pool.close()
+        """Close the database connection pool (if any)."""
+        if self._pool is not None:
+            await self._pool.close()
 
     async def __aenter__(self) -> "Store":
         return self
@@ -132,7 +136,12 @@ class Store:
         await self.close()
 
     async def init_schema(self) -> None:
-        """Initialize the database schema (creates tables if not exist)."""
+        """Initialize the database schema (creates tables if not exist).
+
+        No-op for in-memory stores.
+        """
+        if self._pool is None:
+            return
         async with self._pool.acquire() as conn:
             await conn.execute(SCHEMA)
 
@@ -158,22 +167,28 @@ class Store:
 
     # -- Load operations (cache + db) --
 
-    async def _get_text_asset(self, asset_id: UUID) -> assets.TextAsset | None:
+    def _get_or_build_agent(self, row: asyncpg.Record) -> PersistentAgent:
+        """Get agent from cache or build from row and cache it."""
+        cached = self._get_cached(row["id"])
+        if cached is not None and isinstance(cached, PersistentAgent):
+            return cached
+        agent = PersistentAgent.from_row(row)
+        register_agent(agent, self)
+        self._cache_asset(agent)
+        return agent
+
+    async def _get_system_prompt(self, asset_id: UUID) -> assets.SystemPrompt | None:
         cached = self._get_cached(asset_id)
         if cached is not None:
-            return cached if isinstance(cached, assets.TextAsset) else None
+            return cached if isinstance(cached, assets.SystemPrompt) else None
+
+        if self._pool is None:
+            return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT id, created_at, content FROM text_assets WHERE id = $1",
-                asset_id,
-            )
+            row = await conn.fetchrow(assets.SystemPrompt.SELECT_SQL, asset_id)
             if row:
-                asset = assets.TextAsset(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    content=row["content"],
-                )
+                asset = assets.SystemPrompt.from_row(row)
                 self._cache_asset(asset)
                 return asset
         return None
@@ -183,31 +198,13 @@ class Store:
         if cached is not None:
             return cached if isinstance(cached, messages.Message) else None
 
+        if self._pool is None:
+            return None
+
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """SELECT id, created_at, role, content, tool_calls, tool_call_id,
-                          input_tokens, output_tokens
-                   FROM messages WHERE id = $1""",
-                message_id,
-            )
+            row = await conn.fetchrow(messages.Message.SELECT_SQL, message_id)
             if row:
-                tool_calls = None
-                if row["tool_calls"]:
-                    tc_data = json.loads(row["tool_calls"])
-                    tool_calls = tuple(
-                        messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                        for tc in tc_data
-                    )
-                msg = messages.Message(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    role=row["role"],
-                    content=row["content"],
-                    tool_calls=tool_calls,
-                    tool_call_id=row["tool_call_id"],
-                    input_tokens=row["input_tokens"],
-                    output_tokens=row["output_tokens"],
-                )
+                msg = messages.Message.from_row(row)
                 self._cache_asset(msg)
                 return msg
         return None
@@ -226,7 +223,7 @@ class Store:
             else:
                 to_load.append(mid)
 
-        if to_load:
+        if to_load and self._pool is not None:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     """SELECT id, created_at, role, content, tool_calls, tool_call_id,
@@ -235,72 +232,46 @@ class Store:
                     to_load,
                 )
             for row in rows:
-                tool_calls = None
-                if row["tool_calls"]:
-                    tc_data = json.loads(row["tool_calls"])
-                    tool_calls = tuple(
-                        messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                        for tc in tc_data
-                    )
-                msg = messages.Message(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    role=row["role"],
-                    content=row["content"],
-                    tool_calls=tool_calls,
-                    tool_call_id=row["tool_call_id"],
-                    input_tokens=row["input_tokens"],
-                    output_tokens=row["output_tokens"],
-                )
+                msg = messages.Message.from_row(row)
                 self._cache_asset(msg)
                 msgs_by_id[msg.id] = msg
 
-        return [msgs_by_id[mid] for mid in message_ids if mid in msgs_by_id]
+        # Verify all messages were found
+        for mid in message_ids:
+            if mid not in msgs_by_id:
+                raise exc.MessageNotFoundError(mid)
+
+        return [msgs_by_id[mid] for mid in message_ids]
 
     async def _get_conversation(self, conversation_id: UUID) -> messages.Conversation | None:
         cached = self._get_cached(conversation_id)
         if cached is not None:
             return cached if isinstance(cached, messages.Conversation) else None
 
+        if self._pool is None:
+            return None
+
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT id, created_at, message_ids FROM conversations WHERE id = $1",
-                conversation_id,
-            )
+            row = await conn.fetchrow(messages.Conversation.SELECT_SQL, conversation_id)
             if row:
-                conv = messages.Conversation(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    message_ids=tuple(row["message_ids"]),
-                )
+                conv = messages.Conversation.from_row(row)
                 self._cache_asset(conv)
                 return conv
         return None
 
-    async def _get_agent(self, agent_id: UUID) -> ImmAgent | None:
+    async def _get_agent(self, agent_id: UUID) -> PersistentAgent | None:
         cached = self._get_cached(agent_id)
         if cached is not None:
-            return cached if isinstance(cached, ImmAgent) else None
+            return cached if isinstance(cached, PersistentAgent) else None
+
+        if self._pool is None:
+            return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id, model
-                FROM agents WHERE id = $1
-                """,
-                agent_id,
-            )
+            row = await conn.fetchrow(PersistentAgent.SELECT_SQL, agent_id)
             if row:
-                agent = ImmAgent(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    name=row["name"],
-                    system_prompt_id=row["system_prompt_id"],
-                    parent_id=row["parent_id"],
-                    conversation_id=row["conversation_id"],
-                    model=row["model"],
-                    _store=self,
-                )
+                agent = PersistentAgent.from_row(row)
+                register_agent(agent, self)
                 self._cache_asset(agent)
                 return agent
         return None
@@ -310,81 +281,17 @@ class Store:
     async def _save_one(
         self, conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, asset: assets.Asset
     ) -> None:
-        match asset:
-            case ImmAgent():
-                await conn.execute(
-                    """
-                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    asset.name,
-                    asset.system_prompt_id,
-                    asset.parent_id,
-                    asset.conversation_id,
-                    asset.model,
-                )
-            case messages.Conversation():
-                await conn.execute(
-                    """
-                    INSERT INTO conversations (id, created_at, message_ids)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    list(asset.message_ids),
-                )
-            case messages.Message():
-                tool_calls_json = None
-                if asset.tool_calls:
-                    tool_calls_json = json.dumps(
-                        [
-                            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                            for tc in asset.tool_calls
-                        ]
-                    )
-                await conn.execute(
-                    """
-                    INSERT INTO messages (id, created_at, role, content, tool_calls, tool_call_id,
-                                          input_tokens, output_tokens)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    asset.role,
-                    asset.content,
-                    tool_calls_json,
-                    asset.tool_call_id,
-                    asset.input_tokens,
-                    asset.output_tokens,
-                )
-            case assets.TextAsset():
-                await conn.execute(
-                    """
-                    INSERT INTO text_assets (id, created_at, content)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    asset.content,
-                )
-            case _:
-                raise TypeError(f"Unknown asset type: {type(asset)}")
+        sql, params = asset.to_insert_params()
+        await conn.execute(sql, *params)
 
-    async def save(self, *assets_to_save: assets.Asset) -> None:
-        """Save assets to the database atomically.
-
-        Note: This is typically not needed as create_agent() and advance()
-        automatically save. Use this for migrating agents between stores.
+    async def _save(self, *assets_to_save: assets.Asset) -> None:
+        """Save assets to the database atomically (internal).
 
         All assets are saved in a single transaction.
-        When saving an ImmAgent, its dependencies (system prompt, conversation)
+        When saving an PersistentAgent, its dependencies (system prompt, conversation)
         are automatically saved first if they're in the cache.
+
+        For in-memory stores (no pool), only caches the assets.
         """
         if not assets_to_save:
             return
@@ -398,7 +305,7 @@ class Store:
                 continue
 
             # For agents, add dependencies first (order matters for foreign keys)
-            if isinstance(asset, ImmAgent):
+            if isinstance(asset, PersistentAgent):
                 # Add system prompt if in cache
                 prompt = self._get_cached(asset.system_prompt_id)
                 if prompt is not None and prompt.id not in seen:
@@ -421,12 +328,14 @@ class Store:
             all_assets.append(asset)
             seen.add(asset.id)
 
-        async with self._pool.acquire() as conn:
-            async with conn.transaction():
-                for asset in all_assets:
-                    await self._save_one(conn, asset)
+        # Write to database if we have a pool
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    for asset in all_assets:
+                        await self._save_one(conn, asset)
 
-        # Also cache them
+        # Always cache them
         self._cache_all(*all_assets)
 
     # -- Public API --
@@ -436,8 +345,10 @@ class Store:
         *,
         name: str,
         system_prompt: str,
-        model: str | llm.Model,
-    ) -> ImmAgent:
+        model: str,
+        metadata: dict[str, Any] | None = None,
+        model_config: dict[str, Any] | None = None,
+    ) -> PersistentAgent:
         """Create a new agent with an empty conversation.
 
         The agent is saved immediately and cached.
@@ -445,31 +356,47 @@ class Store:
         Args:
             name: Human-readable name for the agent
             system_prompt: The system prompt content
-            model: LiteLLM model string or Model enum
+            model: LiteLLM model string (e.g., Model.CLAUDE_3_5_HAIKU)
+            metadata: Optional custom key-value data for the agent
+            model_config: Optional LLM configuration (temperature, max_tokens, top_p, etc.)
 
         Returns:
             The new agent
+
+        Raises:
+            ValidationError: If any input is invalid
         """
-        prompt_asset = assets.TextAsset.create(system_prompt)
+        # Validate inputs
+        if not name or not name.strip():
+            raise exc.ValidationError("name", "must not be empty")
+        if not system_prompt or not system_prompt.strip():
+            raise exc.ValidationError("system_prompt", "must not be empty")
+        if not model or not model.strip():
+            raise exc.ValidationError("model", "must not be empty")
+
+        prompt_asset = assets.SystemPrompt.create(system_prompt)
         conversation = messages.Conversation.create()
-        model_str = model.value if isinstance(model, llm.Model) else model
-        agent, _ = ImmAgent._create(
+        agent = PersistentAgent._create(
             name=name,
-            system_prompt=prompt_asset,
-            model=model_str,
-            store=self,
-            conversation=conversation,
+            system_prompt_id=prompt_asset.id,
+            conversation_id=conversation.id,
+            model=model,
+            metadata=metadata,
+            model_config=model_config,
         )
 
-        # Cache first (save() looks up dependencies in cache)
+        # Register agent with this store
+        register_agent(agent, self)
+
+        # Cache first (_save() looks up dependencies in cache)
         self._cache_all(prompt_asset, conversation, agent)
 
         # Save to database
-        await self.save(agent)
+        await self._save(agent)
 
         return agent
 
-    async def load_agent(self, agent_id: UUID) -> ImmAgent:
+    async def load_agent(self, agent_id: UUID) -> PersistentAgent:
         """Load an agent by ID.
 
         Args:
@@ -486,7 +413,61 @@ class Store:
             raise exc.AgentNotFoundError(agent_id)
         return agent
 
-    async def delete(self, agent: ImmAgent) -> None:
+    async def load_agents(self, agent_ids: list[UUID]) -> list[PersistentAgent]:
+        """Load multiple agents by ID in a single batch.
+
+        More efficient than calling load_agent() multiple times.
+
+        Args:
+            agent_ids: List of agent UUIDs to load
+
+        Returns:
+            List of agents in the same order as the input IDs
+
+        Raises:
+            AgentNotFoundError: If any agent ID is not found
+        """
+        if not agent_ids:
+            return []
+
+        agents_by_id: dict[UUID, PersistentAgent] = {}
+        to_load: list[UUID] = []
+
+        # Check cache first
+        for aid in agent_ids:
+            cached = self._get_cached(aid)
+            if cached is not None and isinstance(cached, PersistentAgent):
+                agents_by_id[aid] = cached
+            else:
+                to_load.append(aid)
+
+        # Batch load from DB
+        if to_load and self._pool is not None:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, created_at, name, system_prompt_id, parent_id,
+                           conversation_id, model, metadata, model_config
+                    FROM agents WHERE id = ANY($1)
+                    """,
+                    to_load,
+                )
+            for row in rows:
+                agent = PersistentAgent.from_row(row)
+                register_agent(agent, self)
+                self._cache_asset(agent)
+                agents_by_id[agent.id] = agent
+
+        # Verify all agents were found and return in order
+        result: list[PersistentAgent] = []
+        for aid in agent_ids:
+            if aid not in agents_by_id:
+                raise exc.AgentNotFoundError(aid)
+            result.append(agents_by_id[aid])
+
+        return result
+
+    async def delete(self, agent: PersistentAgent) -> None:
         """Delete an agent from the database and cache.
 
         Only deletes the agent record. Use gc() to clean up orphaned assets.
@@ -494,11 +475,126 @@ class Store:
         Args:
             agent: The agent to delete
         """
-        async with self._pool.acquire() as conn:
-            await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
 
         with self._lock:
             self._cache.pop(agent.id, None)
+
+    async def list_agents(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        name: str | None = None,
+    ) -> list[PersistentAgent]:
+        """List agents with pagination and optional filtering.
+
+        Args:
+            limit: Maximum number of agents to return (default: 100)
+            offset: Number of agents to skip (default: 0)
+            name: Optional name filter (substring match, case-insensitive)
+
+        Returns:
+            List of agents ordered by created_at descending (newest first)
+        """
+        if self._pool is None:
+            # MemoryStore: filter in-memory cache
+            agents = [a for a in self._cache.values() if isinstance(a, PersistentAgent)]
+            if name:
+                name_lower = name.lower()
+                agents = [a for a in agents if name_lower in a.name.lower()]
+            agents.sort(key=lambda a: a.created_at, reverse=True)
+            return agents[offset : offset + limit]
+
+        # PostgreSQL
+        if name:
+            query = """
+                SELECT id, created_at, name, system_prompt_id, parent_id,
+                       conversation_id, model, metadata, model_config
+                FROM agents
+                WHERE name ILIKE $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+            """
+            args = (f"%{name}%", limit, offset)
+        else:
+            query = """
+                SELECT id, created_at, name, system_prompt_id, parent_id,
+                       conversation_id, model, metadata, model_config
+                FROM agents
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+            """
+            args = (limit, offset)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+
+        return [self._get_or_build_agent(row) for row in rows]
+
+    async def count_agents(self, *, name: str | None = None) -> int:
+        """Count total number of agents.
+
+        Args:
+            name: Optional name filter (substring match, case-insensitive)
+
+        Returns:
+            Total count of matching agents
+        """
+        if self._pool is None:
+            # MemoryStore: count in-memory cache
+            agents = [a for a in self._cache.values() if isinstance(a, PersistentAgent)]
+            if name:
+                name_lower = name.lower()
+                agents = [a for a in agents if name_lower in a.name.lower()]
+            return len(agents)
+
+        # PostgreSQL
+        async with self._pool.acquire() as conn:
+            if name:
+                count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM agents WHERE name ILIKE $1",
+                    f"%{name}%",
+                )
+            else:
+                count = await conn.fetchval("SELECT COUNT(*) FROM agents")
+
+        return count or 0
+
+    async def find_by_name(self, name: str) -> list[PersistentAgent]:
+        """Find agents by exact name match.
+
+        Args:
+            name: Exact name to match (case-sensitive)
+
+        Returns:
+            List of agents with the given name, ordered by created_at descending
+        """
+        if self._pool is None:
+            # MemoryStore: filter in-memory cache
+            agents = [
+                a for a in self._cache.values()
+                if isinstance(a, PersistentAgent) and a.name == name
+            ]
+            agents.sort(key=lambda a: a.created_at, reverse=True)
+            return agents
+
+        # PostgreSQL
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, created_at, name, system_prompt_id, parent_id,
+                       conversation_id, model, metadata, model_config
+                FROM agents
+                WHERE name = $1
+                ORDER BY created_at DESC
+                """,
+                name,
+            )
+
+        return [self._get_or_build_agent(row) for row in rows]
 
     async def gc(self) -> dict[str, int]:
         """Garbage collect orphaned assets.
@@ -506,49 +602,65 @@ class Store:
         Deletes conversations, messages, and text_assets that are no longer
         referenced by any agent. Safe to call anytime.
 
+        No-op for in-memory stores.
+
         Returns:
             Dict with counts of deleted assets by type.
         """
+        if self._pool is None:
+            return {"text_assets": 0, "conversations": 0, "messages": 0}
+
         async with self._pool.acquire() as conn:
-            # Delete orphaned text_assets (system prompts not used by any agent)
-            result = await conn.execute("""
-                DELETE FROM text_assets
-                WHERE id NOT IN (SELECT system_prompt_id FROM agents)
-            """)
-            text_assets = int(result.split()[-1])
+            async with conn.transaction():
+                # Delete orphaned text_assets (system prompts not used by any agent)
+                deleted = await conn.fetch("""
+                    DELETE FROM text_assets t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM agents a WHERE a.system_prompt_id = t.id
+                    )
+                    RETURNING id
+                """)
+                text_assets_count = len(deleted)
 
-            # Delete orphaned conversations
-            result = await conn.execute("""
-                DELETE FROM conversations
-                WHERE id NOT IN (SELECT conversation_id FROM agents)
-            """)
-            conversations = int(result.split()[-1])
+                # Delete orphaned conversations
+                deleted = await conn.fetch("""
+                    DELETE FROM conversations c
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM agents a WHERE a.conversation_id = c.id
+                    )
+                    RETURNING id
+                """)
+                conversations_count = len(deleted)
 
-            # Delete orphaned messages
-            result = await conn.execute("""
-                DELETE FROM messages
-                WHERE id NOT IN (
-                    SELECT unnest(message_ids) FROM conversations
-                )
-            """)
-            messages = int(result.split()[-1])
+                # Delete orphaned messages
+                deleted = await conn.fetch("""
+                    DELETE FROM messages m
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM conversations c WHERE m.id = ANY(c.message_ids)
+                    )
+                    RETURNING id
+                """)
+                messages_count = len(deleted)
 
         return {
-            "text_assets": text_assets,
-            "conversations": conversations,
-            "messages": messages,
+            "text_assets": text_assets_count,
+            "conversations": conversations_count,
+            "messages": messages_count,
         }
 
     async def _advance(
         self,
-        agent: ImmAgent,
+        agent: PersistentAgent,
         user_input: str,
         *,
         mcp: mcp_mod.MCPManager | None = None,
         max_tool_rounds: int = 10,
         max_retries: int = 3,
         timeout: float | None = 120.0,
-    ) -> ImmAgent:
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+    ) -> PersistentAgent:
         """Advance the agent with a user message (internal).
 
         Use agent.advance() instead.
@@ -560,83 +672,60 @@ class Store:
             agent.model,
         )
 
-        # Load existing conversation and system prompt
+        # Load conversation and system prompt
         conversation = await self._get_conversation(agent.conversation_id)
         if conversation is None:
             raise exc.ConversationNotFoundError(agent.conversation_id)
 
-        system_prompt = await self._get_text_asset(agent.system_prompt_id)
+        system_prompt = await self._get_system_prompt(agent.system_prompt_id)
         if system_prompt is None:
             raise exc.SystemPromptNotFoundError(agent.system_prompt_id)
 
         # Load existing messages
-        msgs = await self._get_messages(conversation.message_ids)
-        logger.debug("Loaded %d existing messages", len(msgs))
+        history = await self._get_messages(conversation.message_ids)
 
-        # Create user message
-        user_message = messages.Message.user(user_input)
-        msgs.append(user_message)
+        # Build effective model config: agent defaults + call overrides
+        effective_config = dict(agent.model_config)
+        if temperature is not None:
+            effective_config["temperature"] = temperature
+        if max_tokens is not None:
+            effective_config["max_tokens"] = max_tokens
+        if top_p is not None:
+            effective_config["top_p"] = top_p
 
-        # Get tools if MCP is available
-        tools = mcp.get_all_tools() if mcp else None
-
-        # New messages created in this turn
-        new_messages: list[messages.Message] = [user_message]
-
-        # Tool loop
-        tool_round = 0
-        for tool_round in range(max_tool_rounds):
-            # Call LLM
-            assistant_message = await llm.complete(
-                model=agent.model,
-                msgs=msgs,
-                system=system_prompt.content,
-                tools=tools,
-                max_retries=max_retries,
-                timeout=timeout,
-            )
-            msgs.append(assistant_message)
-            new_messages.append(assistant_message)
-
-            # Check for tool calls
-            if not assistant_message.tool_calls or not mcp:
-                break
-
-            # Execute tool calls concurrently
-            async def execute_one(tc: messages.ToolCall) -> messages.Message:
-                result = await mcp.execute(tc.name, tc.arguments)
-                return messages.Message.tool_result(tc.id, result)
-
-            tool_results = await asyncio.gather(
-                *(execute_one(tc) for tc in assistant_message.tool_calls)
-            )
-            for tool_result_message in tool_results:
-                msgs.append(tool_result_message)
-                new_messages.append(tool_result_message)
+        # Run LLM orchestration (pure function, no persistence)
+        new_messages = await advance_mod.advance(
+            model=agent.model,
+            system_prompt=system_prompt.content,
+            history=history,
+            user_input=user_input,
+            mcp=mcp,
+            max_tool_rounds=max_tool_rounds,
+            max_retries=max_retries,
+            timeout=timeout,
+            model_config=effective_config,
+        )
 
         # Create new conversation with all message IDs
         new_conversation = conversation.with_messages(*[m.id for m in new_messages])
 
         # Create new agent state
-        new_agent = agent.evolve(new_conversation)
+        new_agent = agent._evolve(new_conversation)
 
-        # Cache new assets first (save() looks up dependencies in cache)
+        # Cache and save
         self._cache_all(*new_messages, new_conversation, new_agent)
-
-        # Save to database
-        await self.save(new_agent)
+        await self._save(new_agent)
 
         logger.info(
-            "Agent advanced: old_id=%s, new_id=%s, tool_rounds=%d, new_messages=%d",
+            "Agent advanced: old_id=%s, new_id=%s, new_messages=%d",
             agent.id,
             new_agent.id,
-            tool_round + 1,
             len(new_messages),
         )
 
         return new_agent
 
-    async def _get_agent_messages(self, agent: ImmAgent) -> list[messages.Message]:
+    async def _get_agent_messages(self, agent: PersistentAgent) -> list[messages.Message]:
         """Get all messages in an agent's conversation (internal).
 
         Use agent.get_messages() instead.
@@ -646,36 +735,117 @@ class Store:
             raise exc.ConversationNotFoundError(agent.conversation_id)
         return await self._get_messages(conversation.message_ids)
 
-    async def _copy_agent(self, agent: ImmAgent) -> ImmAgent:
-        """Create a copy of an agent with a new ID."""
-        new_agent = ImmAgent(
+    async def _clone_agent(self, agent: PersistentAgent) -> PersistentAgent:
+        """Create a clone of an agent for branching.
+
+        The clone shares the same parent, conversation, and system prompt,
+        allowing you to advance it in a different direction from the original.
+        """
+        new_agent = PersistentAgent(
             id=assets.new_id(),
             created_at=assets.now(),
             name=agent.name,
             system_prompt_id=agent.system_prompt_id,
-            parent_id=None,
+            parent_id=agent.parent_id,
             conversation_id=agent.conversation_id,
             model=agent.model,
-            _store=self,
+            metadata=agent.metadata,
+            model_config=agent.model_config,
         )
+        register_agent(new_agent, self)
         self._cache_asset(new_agent)
-        await self.save(new_agent)
+        await self._save(new_agent)
         return new_agent
 
-    async def _get_agent_lineage(self, agent: ImmAgent) -> list[ImmAgent]:
+    async def _update_metadata(self, agent: PersistentAgent, metadata: dict[str, Any]) -> PersistentAgent:
+        """Create a new agent with updated metadata (internal).
+
+        Use agent.with_metadata() instead.
+        """
+        new_agent = PersistentAgent(
+            id=assets.new_id(),
+            created_at=assets.now(),
+            name=agent.name,
+            system_prompt_id=agent.system_prompt_id,
+            parent_id=agent.id,
+            conversation_id=agent.conversation_id,
+            model=agent.model,
+            metadata=metadata,
+            model_config=agent.model_config,
+        )
+        register_agent(new_agent, self)
+        self._cache_asset(new_agent)
+        await self._save(new_agent)
+        return new_agent
+
+    async def _get_agent_lineage(self, agent: PersistentAgent) -> list[PersistentAgent]:
         """Get the agent's lineage (internal).
 
         Use agent.get_lineage() instead.
+
+        Uses a recursive CTE for efficient single-query traversal.
         """
-        lineage: list[ImmAgent] = [agent]
-        current = agent
+        if self._pool is None:
+            # MemoryStore: fall back to iterative traversal
+            lineage: list[PersistentAgent] = [agent]
+            current = agent
+            while current.parent_id is not None:
+                parent = await self._get_agent(current.parent_id)
+                if parent is None:
+                    raise exc.AgentNotFoundError(current.parent_id)
+                lineage.append(parent)
+                current = parent
+            lineage.reverse()
+            return lineage
 
-        while current.parent_id is not None:
-            parent = await self._get_agent(current.parent_id)
-            if parent is None:
-                break
-            lineage.append(parent)
-            current = parent
+        # PostgreSQL: use recursive CTE for single-query traversal
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE lineage AS (
+                    SELECT id, created_at, name, system_prompt_id, parent_id,
+                           conversation_id, model, metadata, model_config
+                    FROM agents WHERE id = $1
+                    UNION ALL
+                    SELECT a.id, a.created_at, a.name, a.system_prompt_id, a.parent_id,
+                           a.conversation_id, a.model, a.metadata, a.model_config
+                    FROM agents a
+                    INNER JOIN lineage l ON a.id = l.parent_id
+                )
+                SELECT * FROM lineage
+                """,
+                agent.id,
+            )
 
+        if not rows:
+            raise exc.AgentNotFoundError(agent.id)
+
+        # Build agents and cache them (rows are child-first, reverse for root-first)
+        lineage = [self._get_or_build_agent(row) for row in rows]
         lineage.reverse()
         return lineage
+
+
+class MemoryStore(Store):
+    """In-memory store with no database persistence.
+
+    Intended for short-lived use: tests, scripts, experimentation.
+    Not suitable for long-running processes — assets accumulate in memory
+    and are never garbage collected (each turn creates new messages,
+    conversations, and agents that remain in the cache indefinitely).
+
+    For production use, use Store with PostgreSQL instead.
+
+    Usage:
+        async with MemoryStore() as store:
+            agent = await store.create_agent(
+                name="Bot",
+                system_prompt="You are helpful.",
+                model=Model.CLAUDE_3_5_HAIKU,
+            )
+            agent = await agent.advance("Hello!")
+    """
+
+    def __init__(self) -> None:
+        super().__init__(pool=None)
+        self._cache: MutableMapping[UUID, assets.Asset] = {}
