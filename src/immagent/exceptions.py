@@ -27,14 +27,20 @@ class AssetNotFoundError(ImmAgentError):
 
 
 class ConversationNotFoundError(AssetNotFoundError):
-    """Raised when a conversation cannot be found."""
+    """Internal error: agent's conversation is missing.
+
+    This indicates database corruption or a bug. Not part of the public API.
+    """
 
     def __init__(self, conversation_id: UUID):
         super().__init__("Conversation", conversation_id)
 
 
 class SystemPromptNotFoundError(AssetNotFoundError):
-    """Raised when a system prompt cannot be found."""
+    """Internal error: agent's system prompt is missing.
+
+    This indicates database corruption or a bug. Not part of the public API.
+    """
 
     def __init__(self, prompt_id: UUID):
         super().__init__("System prompt", prompt_id)
@@ -66,3 +72,15 @@ class ToolExecutionError(ImmAgentError):
     def __init__(self, tool_name: str, message: str):
         self.tool_name = tool_name
         super().__init__(f"Tool '{tool_name}' failed: {message}")
+
+
+class AgentNotRegisteredError(ImmAgentError):
+    """Raised when an agent is not associated with a store.
+
+    This typically means the agent was created outside the normal flow
+    (not via Store.create_agent or loaded via Store.load_agent).
+    """
+
+    def __init__(self, agent_id: UUID):
+        self.agent_id = agent_id
+        super().__init__(f"Agent {agent_id} is not associated with a store")

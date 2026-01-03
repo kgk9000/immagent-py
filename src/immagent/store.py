@@ -8,7 +8,8 @@ The Store is the main interface for working with agents. It combines:
 
 import threading
 import weakref
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
@@ -76,21 +77,22 @@ class Store:
     The Store manages both persistence (PostgreSQL) and caching (weak refs).
     It's the main interface for creating, loading, and advancing agents.
 
-    Usage with PostgreSQL:
+    Usage:
         async with await Store.connect("postgresql://...") as store:
+            await store.init_schema()
             agent = await store.create_agent(
                 name="Bot",
                 system_prompt="You are helpful.",
                 model=Model.CLAUDE_3_5_HAIKU,
             )
             agent = await agent.advance("Hello!")
-
-    For in-memory stores without persistence, use MemoryStore instead.
     """
 
-    def __init__(self, pool: asyncpg.Pool | None = None):
+    def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
         self._cache: MutableMapping[UUID, assets.Asset] = weakref.WeakValueDictionary()
+        # threading.RLock (not asyncio.Lock) because: all locked operations are sync
+        # dict ops with no await inside, and this protects against multi-threaded access
         self._lock = threading.RLock()
 
     @classmethod
@@ -125,9 +127,8 @@ class Store:
 
 
     async def close(self) -> None:
-        """Close the database connection pool (if any)."""
-        if self._pool is not None:
-            await self._pool.close()
+        """Close the database connection pool."""
+        await self._pool.close()
 
     async def __aenter__(self) -> "Store":
         return self
@@ -136,12 +137,7 @@ class Store:
         await self.close()
 
     async def init_schema(self) -> None:
-        """Initialize the database schema (creates tables if not exist).
-
-        No-op for in-memory stores.
-        """
-        if self._pool is None:
-            return
+        """Initialize the database schema (creates tables if not exist)."""
         async with self._pool.acquire() as conn:
             await conn.execute(SCHEMA)
 
@@ -182,9 +178,6 @@ class Store:
         if cached is not None:
             return cached if isinstance(cached, assets.SystemPrompt) else None
 
-        if self._pool is None:
-            return None
-
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(assets.SystemPrompt.SELECT_SQL, asset_id)
             if row:
@@ -197,9 +190,6 @@ class Store:
         cached = self._get_cached(message_id)
         if cached is not None:
             return cached if isinstance(cached, messages.Message) else None
-
-        if self._pool is None:
-            return None
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(messages.Message.SELECT_SQL, message_id)
@@ -223,7 +213,7 @@ class Store:
             else:
                 to_load.append(mid)
 
-        if to_load and self._pool is not None:
+        if to_load:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     """SELECT id, created_at, role, content, tool_calls, tool_call_id,
@@ -248,9 +238,6 @@ class Store:
         if cached is not None:
             return cached if isinstance(cached, messages.Conversation) else None
 
-        if self._pool is None:
-            return None
-
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(messages.Conversation.SELECT_SQL, conversation_id)
             if row:
@@ -263,9 +250,6 @@ class Store:
         cached = self._get_cached(agent_id)
         if cached is not None:
             return cached if isinstance(cached, PersistentAgent) else None
-
-        if self._pool is None:
-            return None
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(PersistentAgent.SELECT_SQL, agent_id)
@@ -290,8 +274,6 @@ class Store:
         All assets are saved in a single transaction.
         When saving an PersistentAgent, its dependencies (system prompt, conversation)
         are automatically saved first if they're in the cache.
-
-        For in-memory stores (no pool), only caches the assets.
         """
         if not assets_to_save:
             return
@@ -328,14 +310,13 @@ class Store:
             all_assets.append(asset)
             seen.add(asset.id)
 
-        # Write to database if we have a pool
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                async with conn.transaction():
-                    for asset in all_assets:
-                        await self._save_one(conn, asset)
+        # Write to database
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                for asset in all_assets:
+                    await self._save_one(conn, asset)
 
-        # Always cache them
+        # Cache them
         self._cache_all(*all_assets)
 
     # -- Public API --
@@ -346,8 +327,8 @@ class Store:
         name: str,
         system_prompt: str,
         model: str,
-        metadata: dict[str, Any] | None = None,
-        model_config: dict[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        model_config: Mapping[str, Any] | None = None,
     ) -> PersistentAgent:
         """Create a new agent with an empty conversation.
 
@@ -442,14 +423,10 @@ class Store:
                 to_load.append(aid)
 
         # Batch load from DB
-        if to_load and self._pool is not None:
+        if to_load:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
-                    """
-                    SELECT id, created_at, name, system_prompt_id, parent_id,
-                           conversation_id, model, metadata, model_config
-                    FROM agents WHERE id = ANY($1)
-                    """,
+                    f"SELECT {PersistentAgent.COLUMNS} FROM agents WHERE id = ANY($1)",
                     to_load,
                 )
             for row in rows:
@@ -475,9 +452,8 @@ class Store:
         Args:
             agent: The agent to delete
         """
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
+        async with self._pool.acquire() as conn:
+            await conn.execute("DELETE FROM agents WHERE id = $1", agent.id)
 
         with self._lock:
             self._cache.pop(agent.id, None)
@@ -499,31 +475,17 @@ class Store:
         Returns:
             List of agents ordered by created_at descending (newest first)
         """
-        if self._pool is None:
-            # MemoryStore: filter in-memory cache
-            agents = [a for a in self._cache.values() if isinstance(a, PersistentAgent)]
-            if name:
-                name_lower = name.lower()
-                agents = [a for a in agents if name_lower in a.name.lower()]
-            agents.sort(key=lambda a: a.created_at, reverse=True)
-            return agents[offset : offset + limit]
-
-        # PostgreSQL
         if name:
-            query = """
-                SELECT id, created_at, name, system_prompt_id, parent_id,
-                       conversation_id, model, metadata, model_config
-                FROM agents
+            query = f"""
+                SELECT {PersistentAgent.COLUMNS} FROM agents
                 WHERE name ILIKE $1
                 ORDER BY created_at DESC
                 LIMIT $2 OFFSET $3
             """
             args = (f"%{name}%", limit, offset)
         else:
-            query = """
-                SELECT id, created_at, name, system_prompt_id, parent_id,
-                       conversation_id, model, metadata, model_config
-                FROM agents
+            query = f"""
+                SELECT {PersistentAgent.COLUMNS} FROM agents
                 ORDER BY created_at DESC
                 LIMIT $1 OFFSET $2
             """
@@ -543,15 +505,6 @@ class Store:
         Returns:
             Total count of matching agents
         """
-        if self._pool is None:
-            # MemoryStore: count in-memory cache
-            agents = [a for a in self._cache.values() if isinstance(a, PersistentAgent)]
-            if name:
-                name_lower = name.lower()
-                agents = [a for a in agents if name_lower in a.name.lower()]
-            return len(agents)
-
-        # PostgreSQL
         async with self._pool.acquire() as conn:
             if name:
                 count = await conn.fetchval(
@@ -572,25 +525,9 @@ class Store:
         Returns:
             List of agents with the given name, ordered by created_at descending
         """
-        if self._pool is None:
-            # MemoryStore: filter in-memory cache
-            agents = [
-                a for a in self._cache.values()
-                if isinstance(a, PersistentAgent) and a.name == name
-            ]
-            agents.sort(key=lambda a: a.created_at, reverse=True)
-            return agents
-
-        # PostgreSQL
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                """
-                SELECT id, created_at, name, system_prompt_id, parent_id,
-                       conversation_id, model, metadata, model_config
-                FROM agents
-                WHERE name = $1
-                ORDER BY created_at DESC
-                """,
+                f"SELECT {PersistentAgent.COLUMNS} FROM agents WHERE name = $1 ORDER BY created_at DESC",
                 name,
             )
 
@@ -602,14 +539,9 @@ class Store:
         Deletes conversations, messages, and text_assets that are no longer
         referenced by any agent. Safe to call anytime.
 
-        No-op for in-memory stores.
-
         Returns:
             Dict with counts of deleted assets by type.
         """
-        if self._pool is None:
-            return {"text_assets": 0, "conversations": 0, "messages": 0}
-
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 # Delete orphaned text_assets (system prompts not used by any agent)
@@ -757,7 +689,7 @@ class Store:
         await self._save(new_agent)
         return new_agent
 
-    async def _update_metadata(self, agent: PersistentAgent, metadata: dict[str, Any]) -> PersistentAgent:
+    async def _update_metadata(self, agent: PersistentAgent, metadata: Mapping[str, Any]) -> PersistentAgent:
         """Create a new agent with updated metadata (internal).
 
         Use agent.with_metadata() instead.
@@ -770,7 +702,7 @@ class Store:
             parent_id=agent.id,
             conversation_id=agent.conversation_id,
             model=agent.model,
-            metadata=metadata,
+            metadata=MappingProxyType(dict(metadata)),
             model_config=agent.model_config,
         )
         register_agent(new_agent, self)
@@ -785,20 +717,6 @@ class Store:
 
         Uses a recursive CTE for efficient single-query traversal.
         """
-        if self._pool is None:
-            # MemoryStore: fall back to iterative traversal
-            lineage: list[PersistentAgent] = [agent]
-            current = agent
-            while current.parent_id is not None:
-                parent = await self._get_agent(current.parent_id)
-                if parent is None:
-                    raise exc.AgentNotFoundError(current.parent_id)
-                lineage.append(parent)
-                current = parent
-            lineage.reverse()
-            return lineage
-
-        # PostgreSQL: use recursive CTE for single-query traversal
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -824,28 +742,3 @@ class Store:
         lineage = [self._get_or_build_agent(row) for row in rows]
         lineage.reverse()
         return lineage
-
-
-class MemoryStore(Store):
-    """In-memory store with no database persistence.
-
-    Intended for short-lived use: tests, scripts, experimentation.
-    Not suitable for long-running processes — assets accumulate in memory
-    and are never garbage collected (each turn creates new messages,
-    conversations, and agents that remain in the cache indefinitely).
-
-    For production use, use Store with PostgreSQL instead.
-
-    Usage:
-        async with MemoryStore() as store:
-            agent = await store.create_agent(
-                name="Bot",
-                system_prompt="You are helpful.",
-                model=Model.CLAUDE_3_5_HAIKU,
-            )
-            agent = await agent.advance("Hello!")
-    """
-
-    def __init__(self) -> None:
-        super().__init__(pool=None)
-        self._cache: MutableMapping[UUID, assets.Asset] = {}

@@ -1,5 +1,6 @@
 """Base asset types for the immutable agent system."""
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Self
@@ -17,13 +18,13 @@ def now() -> datetime:
 
 
 @dataclass(frozen=True)
-class Asset:
+class Asset(ABC):
     """Base class for all immutable assets.
 
     Every asset has a unique UUID and creation timestamp.
     Assets are immutable - any modification creates a new asset with a new ID.
 
-    Subclasses should define:
+    Subclasses must define:
     - TABLE: The database table name
     - SELECT_SQL: SQL to select by ID (with $1 placeholder)
     - from_row(): Class method to construct from a database row
@@ -38,13 +39,15 @@ class Asset:
     SELECT_SQL: ClassVar[str]
 
     @classmethod
+    @abstractmethod
     def from_row(cls, row: Any) -> Self:
         """Construct an asset from a database row."""
-        raise NotImplementedError
+        ...
 
+    @abstractmethod
     def to_insert_params(self) -> tuple[str, tuple[Any, ...]]:
         """Return (INSERT SQL, parameters) for this asset."""
-        raise NotImplementedError
+        ...
 
 
 @dataclass(frozen=True)

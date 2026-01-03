@@ -74,7 +74,6 @@ asyncio.run(main())
 | Method | Description |
 |--------|-------------|
 | `Store.connect(dsn)` | Connect to PostgreSQL |
-| `MemoryStore()` | In-memory store (no database) |
 | `store.init_schema()` | Create tables if not exist |
 | `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
@@ -88,7 +87,7 @@ asyncio.run(main())
 | `agent.get_messages()` | Get conversation messages |
 | `agent.get_lineage()` | Walk agent's parent chain |
 | `agent.clone()` | Clone agent with new ID |
-| `immagent.Model` | Enum of common LLM models |
+| `immagent.Model` | Constants for common LLM models |
 | `immagent.MCPManager` | MCP tool server manager |
 
 ## Core Concept
@@ -157,15 +156,6 @@ store = await immagent.Store.connect(
 )
 ```
 
-For experimentation or stateless use cases, use `MemoryStore`:
-
-```python
-async with immagent.MemoryStore() as store:
-    agent = await store.create_agent(...)
-    agent = await agent.advance("Hello!")
-    # Agents exist only while referenced — no persistence
-```
-
 ### Assets
 
 Everything is an **Asset** with a UUID and timestamp:
@@ -180,7 +170,6 @@ class Asset:
 Asset types:
 - `SystemPrompt` — the agent's system prompt
 - `Message` — user, assistant, or tool messages
-- `Conversation` — ordered list of message IDs
 - `PersistentAgent` — the agent itself
 
 ### PersistentAgent
@@ -195,7 +184,7 @@ class PersistentAgent(Asset):
     model: str                  # LiteLLM model string
 ```
 
-Agents are bound to a Store and have methods for interaction:
+Agents are bound to a Store and have methods for interaction. When you create or load an agent, it's automatically registered with that Store via an internal weak-reference registry. This lets you call `agent.advance()` directly without passing the store—the agent knows which store it belongs to. When the agent is garbage collected, the binding is automatically cleaned up.
 
 ```python
 # Create via store (auto-saved)
@@ -351,10 +340,8 @@ except immagent.ValidationError as e:
 
 try:
     agent = await agent.advance("Hello")
-except immagent.ConversationNotFoundError as e:
-    print(f"Conversation {e.asset_id} not found")
-except immagent.SystemPromptNotFoundError as e:
-    print(f"System prompt {e.asset_id} not found")
+except immagent.LLMError as e:
+    print(f"LLM call failed: {e}")
 except immagent.ImmAgentError as e:
     print(f"Agent error: {e}")
 ```
@@ -363,8 +350,6 @@ Exception hierarchy:
 - `ImmAgentError` — base exception
   - `ValidationError` — input validation failed
   - `AssetNotFoundError` — asset lookup failed
-    - `ConversationNotFoundError`
-    - `SystemPromptNotFoundError`
     - `AgentNotFoundError`
     - `MessageNotFoundError`
   - `LLMError` — LLM call failed

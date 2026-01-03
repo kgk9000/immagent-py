@@ -1,9 +1,8 @@
 """Tests for asset persistence and retrieval."""
 
-from immagent import MemoryStore, Store
+from immagent import Store
 from immagent.persistent import PersistentAgent
 from immagent.assets import SystemPrompt
-from immagent.llm import Model
 from immagent.messages import Conversation, Message, ToolCall
 
 
@@ -172,48 +171,3 @@ class TestPersistentAgent:
         assert agent2.parent_id == agent1.id
         assert agent2.conversation_id == conv2.id
         assert agent2.name == agent1.name  # Inherited
-
-
-class TestMemoryStore:
-    """Tests for in-memory store (no database)."""
-
-    async def test_create_agent(self):
-        """Agent can be created in memory store."""
-        from immagent.registry import get_store
-
-        async with MemoryStore() as store:
-            agent = await store.create_agent(
-                name="TestBot",
-                system_prompt="You are helpful.",
-                model=Model.CLAUDE_3_5_HAIKU,
-            )
-
-            assert agent.name == "TestBot"
-            assert get_store(agent) is store
-
-    async def test_cache_only(self):
-        """Memory store uses only cache, no database."""
-        async with MemoryStore() as store:
-            prompt = SystemPrompt.create("Test prompt")
-            await store._save(prompt)
-
-            # Should be cached
-            loaded = await store._get_system_prompt(prompt.id)
-            assert loaded is prompt
-
-            # Clear cache - should be gone (no database fallback)
-            store.clear_cache()
-            loaded = await store._get_system_prompt(prompt.id)
-            assert loaded is None
-
-    async def test_gc_is_noop(self):
-        """gc() is a no-op for memory stores."""
-        async with MemoryStore() as store:
-            result = await store.gc()
-            assert result == {"text_assets": 0, "conversations": 0, "messages": 0}
-
-    async def test_init_schema_is_noop(self):
-        """init_schema() is a no-op for memory stores."""
-        async with MemoryStore() as store:
-            # Should not raise
-            await store.init_schema()

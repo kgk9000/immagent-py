@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 from uuid import UUID
 
 import immagent.assets as assets
@@ -13,6 +14,11 @@ from immagent.registry import get_store, register_agent
 
 if TYPE_CHECKING:
     from immagent.mcp import MCPManager
+
+
+def _empty_mapping() -> MappingProxyType[str, Any]:
+    """Create an empty immutable mapping for dataclass defaults."""
+    return MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -41,15 +47,13 @@ class PersistentAgent(assets.Asset):
     parent_id: UUID | None
     conversation_id: UUID
     model: str
-    metadata: dict[str, Any] = field(default_factory=dict)
-    model_config: dict[str, Any] = field(default_factory=dict)
+    # MappingProxyType ensures these can't be mutated, preserving immutability
+    metadata: MappingProxyType[str, Any] = field(default_factory=_empty_mapping)
+    model_config: MappingProxyType[str, Any] = field(default_factory=_empty_mapping)
 
     TABLE: ClassVar[str] = "agents"
-    SELECT_SQL: ClassVar[str] = """
-        SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id,
-               model, metadata, model_config
-        FROM agents WHERE id = $1
-    """
+    COLUMNS: ClassVar[str] = "id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config"
+    SELECT_SQL: ClassVar[str] = f"SELECT {COLUMNS} FROM agents WHERE id = $1"
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -65,8 +69,8 @@ class PersistentAgent(assets.Asset):
             parent_id=row["parent_id"],
             conversation_id=row["conversation_id"],
             model=row["model"],
-            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-            model_config=json.loads(row["model_config"]) if row["model_config"] else {},
+            metadata=MappingProxyType(json.loads(row["metadata"]) if row["metadata"] else {}),
+            model_config=MappingProxyType(json.loads(row["model_config"]) if row["model_config"] else {}),
         )
 
     def to_insert_params(self) -> tuple[str, tuple[Any, ...]]:
@@ -83,8 +87,8 @@ class PersistentAgent(assets.Asset):
                 self.parent_id,
                 self.conversation_id,
                 self.model,
-                json.dumps(self.metadata),
-                json.dumps(self.model_config),
+                json.dumps(dict(self.metadata)),
+                json.dumps(dict(self.model_config)),
             ),
         )
 
@@ -96,8 +100,8 @@ class PersistentAgent(assets.Asset):
         system_prompt_id: UUID,
         conversation_id: UUID,
         model: str,
-        metadata: dict[str, Any] | None = None,
-        model_config: dict[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        model_config: Mapping[str, Any] | None = None,
     ) -> PersistentAgent:
         """Create a new agent (internal).
 
@@ -112,14 +116,14 @@ class PersistentAgent(assets.Asset):
             parent_id=None,
             conversation_id=conversation_id,
             model=model,
-            metadata=metadata or {},
-            model_config=model_config or {},
+            metadata=MappingProxyType(dict(metadata) if metadata else {}),
+            model_config=MappingProxyType(dict(model_config) if model_config else {}),
         )
 
     def _evolve(
         self,
         conversation: messages.Conversation,
-        metadata: dict[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> PersistentAgent:
         """Create a new agent state with an updated conversation (internal).
 
@@ -134,21 +138,21 @@ class PersistentAgent(assets.Asset):
             parent_id=self.id,
             conversation_id=conversation.id,
             model=self.model,
-            metadata=metadata if metadata is not None else self.metadata,
+            metadata=MappingProxyType(dict(metadata)) if metadata is not None else self.metadata,
             model_config=self.model_config,
         )
         # Register new agent with the same store as the parent
         register_agent(new_agent, get_store(self))
         return new_agent
 
-    async def with_metadata(self, metadata: dict[str, Any]) -> PersistentAgent:
+    async def with_metadata(self, metadata: Mapping[str, Any]) -> PersistentAgent:
         """Create a new agent with updated metadata.
 
         The new agent has the same conversation but new metadata.
         Useful for updating agent state between turns.
 
         Args:
-            metadata: New metadata dict (replaces existing metadata)
+            metadata: New metadata (replaces existing metadata)
 
         Returns:
             A new agent with updated metadata
@@ -203,10 +207,16 @@ class PersistentAgent(assets.Asset):
         return await get_store(self)._get_agent_lineage(self)
 
     async def clone(self) -> PersistentAgent:
-        """Create a clone of this agent for branching.
+        """Create a sibling clone of this agent for branching.
 
-        The clone shares the same parent, conversation, and system prompt,
-        allowing you to advance it in a different direction.
+        The clone has a new UUID but shares the same parent_id, conversation,
+        and system prompt. This creates a sibling in the lineage tree, not a child.
+
+        Use this to explore different conversation branches from the same point:
+            agent_a = await agent.clone()
+            agent_b = await agent.clone()
+            agent_a = await agent_a.advance("Option A")
+            agent_b = await agent_b.advance("Option B")
         """
         return await get_store(self)._clone_agent(self)
 

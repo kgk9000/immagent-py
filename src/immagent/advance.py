@@ -74,6 +74,7 @@ async def advance(
     new_messages: list[messages.Message] = [user_message]
 
     # Tool loop - each iteration is one LLM call, possibly followed by tool execution
+    last_assistant_message: messages.Message | None = None
     llm_calls = 0
     for _ in range(max_tool_rounds):
         # Call LLM
@@ -87,6 +88,7 @@ async def advance(
             model_config=model_config,
         )
         llm_calls += 1
+        last_assistant_message = assistant_message
         msgs.append(assistant_message)
         new_messages.append(assistant_message)
 
@@ -108,6 +110,16 @@ async def advance(
         for tool_result_message in tool_results:
             msgs.append(tool_result_message)
             new_messages.append(tool_result_message)
+    else:
+        # Loop completed without break - hit max_tool_rounds
+        # Check if LLM still wanted to call tools
+        if last_assistant_message and last_assistant_message.tool_calls and mcp:
+            logger.warning(
+                "Reached max_tool_rounds=%d but LLM still requesting %d tool(s): %s",
+                max_tool_rounds,
+                len(last_assistant_message.tool_calls),
+                [tc.name for tc in last_assistant_message.tool_calls],
+            )
 
     logger.debug(
         "Advance complete: llm_calls=%d, new_messages=%d",

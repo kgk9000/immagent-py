@@ -7,6 +7,7 @@ No Store, no database, no UUIDs - just an in-memory agent that talks to an LLM.
 from typing import TYPE_CHECKING, Any
 
 import immagent.advance as advance_mod
+import immagent.exceptions as exc
 from immagent.messages import Message
 
 if TYPE_CHECKING:
@@ -47,7 +48,18 @@ class SimpleAgent:
             system_prompt: The system prompt content
             model: LiteLLM model string (e.g., "anthropic/claude-3-5-haiku-20241022")
             model_config: Optional LLM configuration (temperature, max_tokens, etc.)
+
+        Raises:
+            ValidationError: If any input is invalid
         """
+        # Validate inputs (consistent with Store.create_agent)
+        if not name or not name.strip():
+            raise exc.ValidationError("name", "must not be empty")
+        if not system_prompt or not system_prompt.strip():
+            raise exc.ValidationError("system_prompt", "must not be empty")
+        if not model or not model.strip():
+            raise exc.ValidationError("model", "must not be empty")
+
         self._name = name
         self._model = model
         self._model_config = model_config or {}
@@ -145,13 +157,15 @@ class SimpleAgent:
             _messages=list(self._messages) + new_messages,
         )
 
-    def get_token_usage(self) -> tuple[int, int]:
+    async def get_token_usage(self) -> tuple[int, int]:
         """Get total token usage for this conversation.
 
         Returns:
             A tuple of (input_tokens, output_tokens) summed across all
             assistant messages in the conversation.
         """
+        # Async for API consistency with PersistentAgent, even though
+        # SimpleAgent doesn't need it (all data is in-memory)
         input_tokens = sum(m.input_tokens or 0 for m in self._messages if m.role == "assistant")
         output_tokens = sum(m.output_tokens or 0 for m in self._messages if m.role == "assistant")
         return input_tokens, output_tokens

@@ -7,33 +7,30 @@ creates a new agent with a fresh UUID4.
 from immagent.assets import SystemPrompt
 from immagent.exceptions import (
     AgentNotFoundError,
+    AgentNotRegisteredError,
     AssetNotFoundError,
-    ConversationNotFoundError,
     ImmAgentError,
     LLMError,
     MessageNotFoundError,
-    SystemPromptNotFoundError,
     ToolExecutionError,
     ValidationError,
 )
 from immagent.llm import Model
 from immagent.mcp import MCPManager
-from immagent.messages import Conversation, Message, ToolCall
+from immagent.messages import Message, ToolCall
 from immagent.persistent import PersistentAgent
 from immagent.simple import SimpleAgent
-from immagent.store import MemoryStore, Store
+from immagent.store import Store
 
 __all__ = [
     # Core types
     "SimpleAgent",
     "PersistentAgent",
     "Message",
-    "Conversation",
     "ToolCall",
     "SystemPrompt",
     # Store (main interface)
     "Store",
-    "MemoryStore",
     # MCP
     "MCPManager",
     # Models
@@ -41,9 +38,8 @@ __all__ = [
     # Exceptions
     "ImmAgentError",
     "AssetNotFoundError",
-    "ConversationNotFoundError",
-    "SystemPromptNotFoundError",
     "AgentNotFoundError",
+    "AgentNotRegisteredError",
     "MessageNotFoundError",
     "LLMError",
     "ToolExecutionError",
