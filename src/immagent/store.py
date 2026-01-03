@@ -6,7 +6,6 @@ The Store is the main interface for working with agents. It combines:
 - Agent lifecycle operations (create, advance, load)
 """
 
-import json
 import threading
 import weakref
 from collections.abc import MutableMapping
@@ -168,48 +167,13 @@ class Store:
 
     # -- Load operations (cache + db) --
 
-    def _message_from_row(self, row: asyncpg.Record) -> messages.Message:
-        """Build a Message from a database row."""
-        tool_calls = None
-        if row["tool_calls"]:
-            tc_data = json.loads(row["tool_calls"])
-            tool_calls = tuple(
-                messages.ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                for tc in tc_data
-            )
-        return messages.Message(
-            id=row["id"],
-            created_at=row["created_at"],
-            role=row["role"],
-            content=row["content"],
-            tool_calls=tool_calls,
-            tool_call_id=row["tool_call_id"],
-            input_tokens=row["input_tokens"],
-            output_tokens=row["output_tokens"],
-        )
-
-    def _agent_from_row(self, row: asyncpg.Record) -> ImmAgent:
-        """Build an ImmAgent from a database row."""
-        agent = ImmAgent(
-            id=row["id"],
-            created_at=row["created_at"],
-            name=row["name"],
-            system_prompt_id=row["system_prompt_id"],
-            parent_id=row["parent_id"],
-            conversation_id=row["conversation_id"],
-            model=row["model"],
-            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-            model_config=json.loads(row["model_config"]) if row["model_config"] else {},
-        )
-        register_agent(agent, self)
-        return agent
-
     def _get_or_build_agent(self, row: asyncpg.Record) -> ImmAgent:
         """Get agent from cache or build from row and cache it."""
         cached = self._get_cached(row["id"])
         if cached is not None and isinstance(cached, ImmAgent):
             return cached
-        agent = self._agent_from_row(row)
+        agent = ImmAgent.from_row(row)
+        register_agent(agent, self)
         self._cache_asset(agent)
         return agent
 
@@ -222,16 +186,9 @@ class Store:
             return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT id, created_at, content FROM text_assets WHERE id = $1",
-                asset_id,
-            )
+            row = await conn.fetchrow(assets.SystemPrompt.SELECT_SQL, asset_id)
             if row:
-                asset = assets.SystemPrompt(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    content=row["content"],
-                )
+                asset = assets.SystemPrompt.from_row(row)
                 self._cache_asset(asset)
                 return asset
         return None
@@ -245,14 +202,9 @@ class Store:
             return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """SELECT id, created_at, role, content, tool_calls, tool_call_id,
-                          input_tokens, output_tokens
-                   FROM messages WHERE id = $1""",
-                message_id,
-            )
+            row = await conn.fetchrow(messages.Message.SELECT_SQL, message_id)
             if row:
-                msg = self._message_from_row(row)
+                msg = messages.Message.from_row(row)
                 self._cache_asset(msg)
                 return msg
         return None
@@ -280,7 +232,7 @@ class Store:
                     to_load,
                 )
             for row in rows:
-                msg = self._message_from_row(row)
+                msg = messages.Message.from_row(row)
                 self._cache_asset(msg)
                 msgs_by_id[msg.id] = msg
 
@@ -300,16 +252,9 @@ class Store:
             return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT id, created_at, message_ids FROM conversations WHERE id = $1",
-                conversation_id,
-            )
+            row = await conn.fetchrow(messages.Conversation.SELECT_SQL, conversation_id)
             if row:
-                conv = messages.Conversation(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    message_ids=tuple(row["message_ids"]),
-                )
+                conv = messages.Conversation.from_row(row)
                 self._cache_asset(conv)
                 return conv
         return None
@@ -323,15 +268,10 @@ class Store:
             return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config
-                FROM agents WHERE id = $1
-                """,
-                agent_id,
-            )
+            row = await conn.fetchrow(ImmAgent.SELECT_SQL, agent_id)
             if row:
-                agent = self._agent_from_row(row)
+                agent = ImmAgent.from_row(row)
+                register_agent(agent, self)
                 self._cache_asset(agent)
                 return agent
         return None
@@ -341,73 +281,8 @@ class Store:
     async def _save_one(
         self, conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, asset: assets.Asset
     ) -> None:
-        match asset:
-            case ImmAgent():
-                await conn.execute(
-                    """
-                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    asset.name,
-                    asset.system_prompt_id,
-                    asset.parent_id,
-                    asset.conversation_id,
-                    asset.model,
-                    json.dumps(asset.metadata),
-                    json.dumps(asset.model_config),
-                )
-            case messages.Conversation():
-                await conn.execute(
-                    """
-                    INSERT INTO conversations (id, created_at, message_ids)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    list(asset.message_ids),
-                )
-            case messages.Message():
-                tool_calls_json = None
-                if asset.tool_calls:
-                    tool_calls_json = json.dumps(
-                        [
-                            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                            for tc in asset.tool_calls
-                        ]
-                    )
-                await conn.execute(
-                    """
-                    INSERT INTO messages (id, created_at, role, content, tool_calls, tool_call_id,
-                                          input_tokens, output_tokens)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    asset.role,
-                    asset.content,
-                    tool_calls_json,
-                    asset.tool_call_id,
-                    asset.input_tokens,
-                    asset.output_tokens,
-                )
-            case assets.SystemPrompt():
-                await conn.execute(
-                    """
-                    INSERT INTO text_assets (id, created_at, content)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    asset.id,
-                    asset.created_at,
-                    asset.content,
-                )
-            case _:
-                raise TypeError(f"Unknown asset type: {type(asset)}")
+        sql, params = asset.to_insert_params()
+        await conn.execute(sql, *params)
 
     async def _save(self, *assets_to_save: assets.Asset) -> None:
         """Save assets to the database atomically (internal).
@@ -578,7 +453,8 @@ class Store:
                     to_load,
                 )
             for row in rows:
-                agent = self._agent_from_row(row)
+                agent = ImmAgent.from_row(row)
+                register_agent(agent, self)
                 self._cache_asset(agent)
                 agents_by_id[agent.id] = agent
 

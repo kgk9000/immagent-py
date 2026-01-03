@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 import immagent.assets as assets
@@ -39,8 +40,49 @@ class ImmAgent(assets.Asset):
     metadata: dict[str, Any] = field(default_factory=dict)
     model_config: dict[str, Any] = field(default_factory=dict)
 
+    TABLE: ClassVar[str] = "agents"
+    SELECT_SQL: ClassVar[str] = """
+        SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id,
+               model, metadata, model_config
+        FROM agents WHERE id = $1
+    """
+
     def __hash__(self) -> int:
         return hash(self.id)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ImmAgent":
+        """Construct from a database row."""
+        return cls(
+            id=row["id"],
+            created_at=row["created_at"],
+            name=row["name"],
+            system_prompt_id=row["system_prompt_id"],
+            parent_id=row["parent_id"],
+            conversation_id=row["conversation_id"],
+            model=row["model"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            model_config=json.loads(row["model_config"]) if row["model_config"] else {},
+        )
+
+    def to_insert_params(self) -> tuple[str, tuple[Any, ...]]:
+        """Return (INSERT SQL, parameters) for this asset."""
+        return (
+            """INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id,
+                                   conversation_id, model, metadata, model_config)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING""",
+            (
+                self.id,
+                self.created_at,
+                self.name,
+                self.system_prompt_id,
+                self.parent_id,
+                self.conversation_id,
+                self.model,
+                json.dumps(self.metadata),
+                json.dumps(self.model_config),
+            ),
+        )
 
     @classmethod
     def _create(
