@@ -38,13 +38,16 @@ asyncio.run(main())
 | `store.init_schema()` | Create tables if not exist |
 | `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
+| `store.list_agents()` | List agents with pagination |
+| `store.count_agents()` | Count total agents |
+| `store.find_by_name(name)` | Find agents by exact name |
 | `store.delete(agent)` | Delete an agent |
 | `store.gc()` | Remove orphaned assets |
 | `store.clear_cache()` | Clear in-memory cache |
-| `agent.advance(input)` | Call LLM and return new agent |
+| `agent.advance(input, temperature=, max_tokens=, top_p=)` | Call LLM and return new agent |
 | `agent.get_messages()` | Get conversation messages |
 | `agent.get_lineage()` | Walk agent's parent chain |
-| `agent.copy()` | Copy agent with new ID |
+| `agent.clone()` | Clone agent with new ID |
 | `immagent.Model` | Enum of common LLM models |
 | `immagent.MCPManager` | MCP tool server manager |
 

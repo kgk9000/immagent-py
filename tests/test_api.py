@@ -253,7 +253,7 @@ class TestGC:
         )
 
         # Copy shares the same system prompt and conversation
-        await agent1.copy()
+        await agent1.clone()
 
         # Delete the original
         await store.delete(agent1)
@@ -267,31 +267,196 @@ class TestGC:
         assert result["messages"] == 0
 
 
-class TestCopy:
-    async def test_copy_creates_new_id(self, store: Store):
-        """copy() creates agent with new ID but same parent (sibling)."""
+class TestListAgents:
+    async def test_list_agents_empty(self, store: Store):
+        """list_agents returns empty list when no agents."""
+        result = await store.list_agents()
+        assert result == []
+
+    async def test_list_agents_returns_all(self, store: Store):
+        """list_agents returns all agents."""
+        await store.create_agent(
+            name="Bot1",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        await store.create_agent(
+            name="Bot2",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.list_agents()
+
+        assert len(result) == 2
+
+    async def test_list_agents_pagination(self, store: Store):
+        """list_agents respects limit and offset."""
+        for i in range(5):
+            await store.create_agent(
+                name=f"Bot{i}",
+                system_prompt="You are helpful.",
+                model=immagent.Model.CLAUDE_3_5_HAIKU,
+            )
+
+        # Get first 2
+        result = await store.list_agents(limit=2)
+        assert len(result) == 2
+
+        # Get next 2
+        result = await store.list_agents(limit=2, offset=2)
+        assert len(result) == 2
+
+        # Get last 1
+        result = await store.list_agents(limit=2, offset=4)
+        assert len(result) == 1
+
+    async def test_list_agents_name_filter(self, store: Store):
+        """list_agents filters by name substring."""
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        await store.create_agent(
+            name="OtherAgent",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.list_agents(name="Bot")
+
+        assert len(result) == 1
+        assert result[0].name == "TestBot"
+
+    async def test_list_agents_name_filter_case_insensitive(self, store: Store):
+        """list_agents name filter is case-insensitive."""
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.list_agents(name="testbot")
+
+        assert len(result) == 1
+
+
+class TestCountAgents:
+    async def test_count_agents_empty(self, store: Store):
+        """count_agents returns 0 when no agents."""
+        count = await store.count_agents()
+        assert count == 0
+
+    async def test_count_agents(self, store: Store):
+        """count_agents returns correct count."""
+        await store.create_agent(
+            name="Bot1",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        await store.create_agent(
+            name="Bot2",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        count = await store.count_agents()
+
+        assert count == 2
+
+    async def test_count_agents_with_filter(self, store: Store):
+        """count_agents respects name filter."""
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        await store.create_agent(
+            name="OtherAgent",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        count = await store.count_agents(name="Bot")
+
+        assert count == 1
+
+
+class TestFindByName:
+    async def test_find_by_name_no_match(self, store: Store):
+        """find_by_name returns empty list when no match."""
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.find_by_name("OtherBot")
+
+        assert result == []
+
+    async def test_find_by_name_exact_match(self, store: Store):
+        """find_by_name returns agents with exact name."""
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="Different prompt.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+        await store.create_agent(
+            name="OtherBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.find_by_name("TestBot")
+
+        assert len(result) == 2
+        assert all(a.name == "TestBot" for a in result)
+
+    async def test_find_by_name_case_sensitive(self, store: Store):
+        """find_by_name is case-sensitive."""
+        await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        result = await store.find_by_name("testbot")
+
+        assert result == []
+
+
+class TestClone:
+    async def test_clone_creates_new_id(self, store: Store):
+        """clone() creates agent with new ID but same parent (sibling)."""
         agent1 = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        agent2 = await agent1.copy()
+        agent2 = await agent1.clone()
 
         assert agent2.id != agent1.id
         assert agent2.name == agent1.name
         assert agent2.model == agent1.model
         assert agent2.parent_id == agent1.parent_id  # Sibling, same parent
 
-    async def test_copy_keeps_conversation(self, store: Store):
-        """copy() keeps same conversation by default."""
+    async def test_clone_keeps_conversation(self, store: Store):
+        """clone() keeps same conversation by default."""
         agent1 = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        agent2 = await agent1.copy()
+        agent2 = await agent1.clone()
 
         assert agent2.conversation_id == agent1.conversation_id
 
@@ -500,18 +665,89 @@ class TestMetadata:
 
         assert agent2.metadata == {"persistent": True}
 
-    async def test_copy_preserves_metadata(self, store: Store):
-        """Copy preserves metadata."""
+    async def test_clone_preserves_metadata(self, store: Store):
+        """Clone preserves metadata."""
         agent1 = await store.create_agent(
             name="TestBot",
             system_prompt="You are helpful.",
             model=immagent.Model.CLAUDE_3_5_HAIKU,
-            metadata={"copied": True},
+            metadata={"cloned": True},
         )
 
-        agent2 = await agent1.copy()
+        agent2 = await agent1.clone()
 
-        assert agent2.metadata == {"copied": True}
+        assert agent2.metadata == {"cloned": True}
+
+
+class TestModelConfig:
+    """Tests for model configuration."""
+
+    async def test_create_agent_with_model_config(self, store: Store):
+        """Agent can be created with model_config."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            model_config={"temperature": 0.7, "max_tokens": 1000},
+        )
+
+        assert agent.model_config == {"temperature": 0.7, "max_tokens": 1000}
+
+    async def test_create_agent_without_model_config(self, store: Store):
+        """Agent without model_config gets empty dict."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+        )
+
+        assert agent.model_config == {}
+
+    async def test_model_config_persists(self, store: Store):
+        """Model config is saved and loaded from database."""
+        agent = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            model_config={"temperature": 0.5},
+        )
+
+        store.clear_cache()
+        loaded = await store.load_agent(agent.id)
+
+        assert loaded.model_config == {"temperature": 0.5}
+
+    async def test_model_config_inherited_on_evolve(self, store: Store):
+        """Model config is inherited when agent evolves."""
+        from immagent.messages import Conversation
+
+        agent1 = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            model_config={"temperature": 0.8},
+        )
+
+        # Manually evolve
+        conv = Conversation.create()
+        store._cache_all(conv)
+        agent2 = agent1._evolve(conv)
+        await store._save(agent2)
+
+        assert agent2.model_config == {"temperature": 0.8}
+
+    async def test_clone_preserves_model_config(self, store: Store):
+        """Clone preserves model_config."""
+        agent1 = await store.create_agent(
+            name="TestBot",
+            system_prompt="You are helpful.",
+            model=immagent.Model.CLAUDE_3_5_HAIKU,
+            model_config={"temperature": 0.3},
+        )
+
+        agent2 = await agent1.clone()
+
+        assert agent2.model_config == {"temperature": 0.3}
 
 
 class TestTokenUsage:

@@ -10,6 +10,7 @@ import asyncio
 import json
 import threading
 import weakref
+from collections.abc import MutableMapping
 from typing import Any
 from uuid import UUID
 
@@ -59,12 +60,14 @@ CREATE TABLE IF NOT EXISTS agents (
     parent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
     conversation_id UUID NOT NULL REFERENCES conversations(id),
     model TEXT NOT NULL,
-    metadata JSONB NOT NULL DEFAULT '{}'
+    metadata JSONB NOT NULL DEFAULT '{}',
+    model_config JSONB NOT NULL DEFAULT '{}'
 );
 
 -- Indexes for common lookups
 CREATE INDEX IF NOT EXISTS idx_agents_parent_id ON agents(parent_id);
 CREATE INDEX IF NOT EXISTS idx_agents_conversation_id ON agents(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name);
 """
 
 
@@ -88,9 +91,7 @@ class Store:
 
     def __init__(self, pool: asyncpg.Pool | None = None):
         self._pool = pool
-        self._cache: weakref.WeakValueDictionary[UUID, assets.Asset] = (
-            weakref.WeakValueDictionary()
-        )
+        self._cache: MutableMapping[UUID, assets.Asset] = weakref.WeakValueDictionary()
         self._lock = threading.RLock()
 
     @classmethod
@@ -299,13 +300,14 @@ class Store:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata
+                SELECT id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config
                 FROM agents WHERE id = $1
                 """,
                 agent_id,
             )
             if row:
                 metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
                 agent = ImmAgent(
                     id=row["id"],
                     created_at=row["created_at"],
@@ -315,6 +317,7 @@ class Store:
                     conversation_id=row["conversation_id"],
                     model=row["model"],
                     metadata=metadata,
+                    model_config=model_config,
                     _store=self,
                 )
                 self._cache_asset(agent)
@@ -330,8 +333,8 @@ class Store:
             case ImmAgent():
                 await conn.execute(
                     """
-                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    INSERT INTO agents (id, created_at, name, system_prompt_id, parent_id, conversation_id, model, metadata, model_config)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     asset.id,
@@ -342,6 +345,7 @@ class Store:
                     asset.conversation_id,
                     asset.model,
                     json.dumps(asset.metadata),
+                    json.dumps(asset.model_config),
                 )
             case messages.Conversation():
                 await conn.execute(
@@ -456,6 +460,7 @@ class Store:
         system_prompt: str,
         model: str,
         metadata: dict[str, Any] | None = None,
+        model_config: dict[str, Any] | None = None,
     ) -> ImmAgent:
         """Create a new agent with an empty conversation.
 
@@ -466,6 +471,7 @@ class Store:
             system_prompt: The system prompt content
             model: LiteLLM model string (e.g., Model.CLAUDE_3_5_HAIKU)
             metadata: Optional custom key-value data for the agent
+            model_config: Optional LLM configuration (temperature, max_tokens, top_p, etc.)
 
         Returns:
             The new agent
@@ -491,6 +497,7 @@ class Store:
             model=model_str,
             store=self,
             metadata=metadata,
+            model_config=model_config,
         )
 
         # Cache first (_save() looks up dependencies in cache)
@@ -552,13 +559,14 @@ class Store:
                 rows = await conn.fetch(
                     """
                     SELECT id, created_at, name, system_prompt_id, parent_id,
-                           conversation_id, model, metadata
+                           conversation_id, model, metadata, model_config
                     FROM agents WHERE id = ANY($1)
                     """,
                     to_load,
                 )
             for row in rows:
                 metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
                 agent = ImmAgent(
                     id=row["id"],
                     created_at=row["created_at"],
@@ -567,8 +575,9 @@ class Store:
                     parent_id=row["parent_id"],
                     conversation_id=row["conversation_id"],
                     model=row["model"],
-                    _store=self,
                     metadata=metadata,
+                    model_config=model_config,
+                    _store=self,
                 )
                 self._cache_asset(agent)
                 agents_by_id[agent.id] = agent
@@ -597,6 +606,167 @@ class Store:
         with self._lock:
             self._cache.pop(agent.id, None)
 
+    async def list_agents(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        name: str | None = None,
+    ) -> list[ImmAgent]:
+        """List agents with pagination and optional filtering.
+
+        Args:
+            limit: Maximum number of agents to return (default: 100)
+            offset: Number of agents to skip (default: 0)
+            name: Optional name filter (substring match, case-insensitive)
+
+        Returns:
+            List of agents ordered by created_at descending (newest first)
+        """
+        if self._pool is None:
+            # MemoryStore: filter in-memory cache
+            agents = [a for a in self._cache.values() if isinstance(a, ImmAgent)]
+            if name:
+                name_lower = name.lower()
+                agents = [a for a in agents if name_lower in a.name.lower()]
+            agents.sort(key=lambda a: a.created_at, reverse=True)
+            return agents[offset : offset + limit]
+
+        # PostgreSQL
+        if name:
+            query = """
+                SELECT id, created_at, name, system_prompt_id, parent_id,
+                       conversation_id, model, metadata, model_config
+                FROM agents
+                WHERE name ILIKE $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+            """
+            args = (f"%{name}%", limit, offset)
+        else:
+            query = """
+                SELECT id, created_at, name, system_prompt_id, parent_id,
+                       conversation_id, model, metadata, model_config
+                FROM agents
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+            """
+            args = (limit, offset)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+
+        agents = []
+        for row in rows:
+            # Check cache first
+            cached = self._get_cached(row["id"])
+            if cached is not None and isinstance(cached, ImmAgent):
+                agents.append(cached)
+            else:
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
+                agent = ImmAgent(
+                    id=row["id"],
+                    created_at=row["created_at"],
+                    name=row["name"],
+                    system_prompt_id=row["system_prompt_id"],
+                    parent_id=row["parent_id"],
+                    conversation_id=row["conversation_id"],
+                    model=row["model"],
+                    metadata=metadata,
+                    model_config=model_config,
+                    _store=self,
+                )
+                self._cache_asset(agent)
+                agents.append(agent)
+
+        return agents
+
+    async def count_agents(self, *, name: str | None = None) -> int:
+        """Count total number of agents.
+
+        Args:
+            name: Optional name filter (substring match, case-insensitive)
+
+        Returns:
+            Total count of matching agents
+        """
+        if self._pool is None:
+            # MemoryStore: count in-memory cache
+            agents = [a for a in self._cache.values() if isinstance(a, ImmAgent)]
+            if name:
+                name_lower = name.lower()
+                agents = [a for a in agents if name_lower in a.name.lower()]
+            return len(agents)
+
+        # PostgreSQL
+        async with self._pool.acquire() as conn:
+            if name:
+                count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM agents WHERE name ILIKE $1",
+                    f"%{name}%",
+                )
+            else:
+                count = await conn.fetchval("SELECT COUNT(*) FROM agents")
+
+        return count or 0
+
+    async def find_by_name(self, name: str) -> list[ImmAgent]:
+        """Find agents by exact name match.
+
+        Args:
+            name: Exact name to match (case-sensitive)
+
+        Returns:
+            List of agents with the given name, ordered by created_at descending
+        """
+        if self._pool is None:
+            # MemoryStore: filter in-memory cache
+            agents = [
+                a for a in self._cache.values()
+                if isinstance(a, ImmAgent) and a.name == name
+            ]
+            agents.sort(key=lambda a: a.created_at, reverse=True)
+            return agents
+
+        # PostgreSQL
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, created_at, name, system_prompt_id, parent_id,
+                       conversation_id, model, metadata, model_config
+                FROM agents
+                WHERE name = $1
+                ORDER BY created_at DESC
+                """,
+                name,
+            )
+
+        agents = []
+        for row in rows:
+            cached = self._get_cached(row["id"])
+            if cached is not None and isinstance(cached, ImmAgent):
+                agents.append(cached)
+            else:
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
+                agent = ImmAgent(
+                    id=row["id"],
+                    created_at=row["created_at"],
+                    name=row["name"],
+                    system_prompt_id=row["system_prompt_id"],
+                    parent_id=row["parent_id"],
+                    conversation_id=row["conversation_id"],
+                    model=row["model"],
+                    metadata=metadata,
+                    model_config=model_config,
+                    _store=self,
+                )
+                self._cache_asset(agent)
+                agents.append(agent)
+
+        return agents
+
     async def gc(self) -> dict[str, int]:
         """Garbage collect orphaned assets.
 
@@ -612,31 +782,32 @@ class Store:
             return {"text_assets": 0, "conversations": 0, "messages": 0}
 
         async with self._pool.acquire() as conn:
-            # Delete orphaned text_assets (system prompts not used by any agent)
-            deleted = await conn.fetch("""
-                DELETE FROM text_assets
-                WHERE id NOT IN (SELECT system_prompt_id FROM agents)
-                RETURNING id
-            """)
-            text_assets_count = len(deleted)
+            async with conn.transaction():
+                # Delete orphaned text_assets (system prompts not used by any agent)
+                deleted = await conn.fetch("""
+                    DELETE FROM text_assets
+                    WHERE id NOT IN (SELECT system_prompt_id FROM agents)
+                    RETURNING id
+                """)
+                text_assets_count = len(deleted)
 
-            # Delete orphaned conversations
-            deleted = await conn.fetch("""
-                DELETE FROM conversations
-                WHERE id NOT IN (SELECT conversation_id FROM agents)
-                RETURNING id
-            """)
-            conversations_count = len(deleted)
+                # Delete orphaned conversations
+                deleted = await conn.fetch("""
+                    DELETE FROM conversations
+                    WHERE id NOT IN (SELECT conversation_id FROM agents)
+                    RETURNING id
+                """)
+                conversations_count = len(deleted)
 
-            # Delete orphaned messages
-            deleted = await conn.fetch("""
-                DELETE FROM messages
-                WHERE id NOT IN (
-                    SELECT unnest(message_ids) FROM conversations
-                )
-                RETURNING id
-            """)
-            messages_count = len(deleted)
+                # Delete orphaned messages
+                deleted = await conn.fetch("""
+                    DELETE FROM messages
+                    WHERE id NOT IN (
+                        SELECT unnest(message_ids) FROM conversations
+                    )
+                    RETURNING id
+                """)
+                messages_count = len(deleted)
 
         return {
             "text_assets": text_assets_count,
@@ -653,6 +824,9 @@ class Store:
         max_tool_rounds: int = 10,
         max_retries: int = 3,
         timeout: float | None = 120.0,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
     ) -> ImmAgent:
         """Advance the agent with a user message (internal).
 
@@ -667,6 +841,15 @@ class Store:
             raise exc.ValidationError("max_retries", "must be non-negative")
         if timeout is not None and timeout <= 0:
             raise exc.ValidationError("timeout", "must be positive")
+
+        # Build effective model config: agent defaults + call overrides
+        effective_config = dict(agent.model_config)
+        if temperature is not None:
+            effective_config["temperature"] = temperature
+        if max_tokens is not None:
+            effective_config["max_tokens"] = max_tokens
+        if top_p is not None:
+            effective_config["top_p"] = top_p
 
         logger.info(
             "Advancing agent: id=%s, name=%s, model=%s",
@@ -709,6 +892,7 @@ class Store:
                 tools=tools,
                 max_retries=max_retries,
                 timeout=timeout,
+                model_config=effective_config,
             )
             llm_calls += 1
             msgs.append(assistant_message)
@@ -765,10 +949,10 @@ class Store:
             raise exc.ConversationNotFoundError(agent.conversation_id)
         return await self._get_messages(conversation.message_ids)
 
-    async def _copy_agent(self, agent: ImmAgent) -> ImmAgent:
-        """Create a copy of an agent for branching.
+    async def _clone_agent(self, agent: ImmAgent) -> ImmAgent:
+        """Create a clone of an agent for branching.
 
-        The copy shares the same parent, conversation, and system prompt,
+        The clone shares the same parent, conversation, and system prompt,
         allowing you to advance it in a different direction from the original.
         """
         new_agent = ImmAgent(
@@ -780,6 +964,7 @@ class Store:
             conversation_id=agent.conversation_id,
             model=agent.model,
             metadata=agent.metadata,
+            model_config=agent.model_config,
             _store=self,
         )
         self._cache_asset(new_agent)
@@ -800,6 +985,7 @@ class Store:
             conversation_id=agent.conversation_id,
             model=agent.model,
             metadata=metadata,
+            model_config=agent.model_config,
             _store=self,
         )
         self._cache_asset(new_agent)
@@ -810,16 +996,68 @@ class Store:
         """Get the agent's lineage (internal).
 
         Use agent.get_lineage() instead.
-        """
-        lineage: list[ImmAgent] = [agent]
-        current = agent
 
-        while current.parent_id is not None:
-            parent = await self._get_agent(current.parent_id)
-            if parent is None:
-                break
-            lineage.append(parent)
-            current = parent
+        Uses a recursive CTE for efficient single-query traversal.
+        """
+        if self._pool is None:
+            # MemoryStore: fall back to iterative traversal
+            lineage: list[ImmAgent] = [agent]
+            current = agent
+            while current.parent_id is not None:
+                parent = await self._get_agent(current.parent_id)
+                if parent is None:
+                    raise exc.AgentNotFoundError(current.parent_id)
+                lineage.append(parent)
+                current = parent
+            lineage.reverse()
+            return lineage
+
+        # PostgreSQL: use recursive CTE for single-query traversal
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE lineage AS (
+                    SELECT id, created_at, name, system_prompt_id, parent_id,
+                           conversation_id, model, metadata, model_config
+                    FROM agents WHERE id = $1
+                    UNION ALL
+                    SELECT a.id, a.created_at, a.name, a.system_prompt_id, a.parent_id,
+                           a.conversation_id, a.model, a.metadata, a.model_config
+                    FROM agents a
+                    INNER JOIN lineage l ON a.id = l.parent_id
+                )
+                SELECT * FROM lineage
+                """,
+                agent.id,
+            )
+
+        if not rows:
+            raise exc.AgentNotFoundError(agent.id)
+
+        # Build agents and cache them (rows are child-first, reverse for root-first)
+        lineage = []
+        for row in rows:
+            # Check cache first
+            cached = self._get_cached(row["id"])
+            if cached is not None and isinstance(cached, ImmAgent):
+                lineage.append(cached)
+            else:
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
+                loaded = ImmAgent(
+                    id=row["id"],
+                    created_at=row["created_at"],
+                    name=row["name"],
+                    system_prompt_id=row["system_prompt_id"],
+                    parent_id=row["parent_id"],
+                    conversation_id=row["conversation_id"],
+                    model=row["model"],
+                    metadata=metadata,
+                    model_config=model_config,
+                    _store=self,
+                )
+                self._cache_asset(loaded)
+                lineage.append(loaded)
 
         lineage.reverse()
         return lineage
@@ -844,4 +1082,4 @@ class MemoryStore(Store):
     def __init__(self) -> None:
         super().__init__(pool=None)
         # Use strong references since there's no DB fallback
-        self._cache: dict[UUID, assets.Asset] = {}
+        self._cache: MutableMapping[UUID, assets.Asset] = {}

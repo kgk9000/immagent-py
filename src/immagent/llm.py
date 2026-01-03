@@ -36,6 +36,7 @@ async def complete(
     tools: list[dict[str, Any]] | None = None,
     max_retries: int = 3,
     timeout: float | None = 120.0,
+    model_config: dict[str, Any] | None = None,
 ) -> messages.Message:
     """Call an LLM via LiteLLM and return the response as a Message.
 
@@ -48,6 +49,7 @@ async def complete(
         tools: Optional list of tools in OpenAI function format
         max_retries: Number of retry attempts for transient failures (default: 3)
         timeout: Request timeout in seconds (default: 120). None for no timeout.
+        model_config: Optional LLM configuration (temperature, max_tokens, top_p, etc.)
 
     Returns:
         An assistant Message with the response
@@ -66,6 +68,10 @@ async def complete(
         kwargs["tools"] = tools
     if timeout is not None:
         kwargs["timeout"] = timeout
+
+    # Apply model config (temperature, max_tokens, top_p, etc.)
+    if model_config:
+        kwargs.update(model_config)
 
     # Call LiteLLM (handles retries with exponential backoff internally)
     logger.debug(

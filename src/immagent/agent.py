@@ -28,6 +28,7 @@ class ImmAgent(assets.Asset):
         conversation_id: UUID of the Conversation asset
         model: LiteLLM model string (e.g., "anthropic/claude-sonnet-4-20250514")
         metadata: Custom key-value data attached to the agent
+        model_config: LLM configuration (temperature, max_tokens, etc.)
     """
 
     name: str
@@ -37,6 +38,7 @@ class ImmAgent(assets.Asset):
     model: str
     _store: Store = field(compare=True, hash=False, repr=False)
     metadata: dict[str, Any] = field(default_factory=dict)
+    model_config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def _create(
@@ -48,6 +50,7 @@ class ImmAgent(assets.Asset):
         model: str,
         store: Store,
         metadata: dict[str, Any] | None = None,
+        model_config: dict[str, Any] | None = None,
     ) -> ImmAgent:
         """Create a new agent (internal).
 
@@ -63,6 +66,7 @@ class ImmAgent(assets.Asset):
             conversation_id=conversation_id,
             model=model,
             metadata=metadata or {},
+            model_config=model_config or {},
             _store=store,
         )
 
@@ -74,7 +78,7 @@ class ImmAgent(assets.Asset):
         """Create a new agent state with an updated conversation (internal).
 
         The new agent links back to this one via parent_id.
-        Metadata is inherited from the current agent unless overridden.
+        Metadata and model_config are inherited from the current agent.
         """
         return ImmAgent(
             id=assets.new_id(),
@@ -85,6 +89,7 @@ class ImmAgent(assets.Asset):
             conversation_id=conversation.id,
             model=self.model,
             metadata=metadata if metadata is not None else self.metadata,
+            model_config=self.model_config,
             _store=self._store,
         )
 
@@ -110,6 +115,9 @@ class ImmAgent(assets.Asset):
         max_retries: int = 3,
         timeout: float | None = 120.0,
         max_tool_rounds: int = 10,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
     ) -> ImmAgent:
         """Process a user message and return a new agent with the response.
 
@@ -122,6 +130,9 @@ class ImmAgent(assets.Asset):
             max_retries: Number of retries for LLM calls (default: 3)
             timeout: Request timeout in seconds, or None for no timeout (default: 120)
             max_tool_rounds: Maximum tool call rounds (default: 10)
+            temperature: Override temperature for this call (default: use agent's model_config)
+            max_tokens: Override max_tokens for this call (default: use agent's model_config)
+            top_p: Override top_p for this call (default: use agent's model_config)
         """
         return await self._store._advance(
             self,
@@ -130,6 +141,9 @@ class ImmAgent(assets.Asset):
             max_retries=max_retries,
             timeout=timeout,
             max_tool_rounds=max_tool_rounds,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
         )
 
     async def get_messages(self) -> list[messages.Message]:
@@ -140,13 +154,13 @@ class ImmAgent(assets.Asset):
         """Get the chain of agents from root to this agent."""
         return await self._store._get_agent_lineage(self)
 
-    async def copy(self) -> ImmAgent:
-        """Create a copy of this agent for branching.
+    async def clone(self) -> ImmAgent:
+        """Create a clone of this agent for branching.
 
-        The copy shares the same parent, conversation, and system prompt,
+        The clone shares the same parent, conversation, and system prompt,
         allowing you to advance it in a different direction.
         """
-        return await self._store._copy_agent(self)
+        return await self._store._clone_agent(self)
 
     async def get_token_usage(self) -> tuple[int, int]:
         """Get total token usage for this agent's conversation.
