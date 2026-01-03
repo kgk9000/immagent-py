@@ -6,7 +6,6 @@ The Store is the main interface for working with agents. It combines:
 - Agent lifecycle operations (create, advance, load)
 """
 
-import asyncio
 import json
 import threading
 import weakref
@@ -16,9 +15,9 @@ from uuid import UUID
 
 import asyncpg
 
+import immagent.advance as advance_mod
 import immagent.assets as assets
 import immagent.exceptions as exc
-import immagent.llm as llm
 import immagent.mcp as mcp_mod
 import immagent.messages as messages
 from immagent.agent import ImmAgent
@@ -790,15 +789,24 @@ class Store:
 
         Use agent.advance() instead.
         """
-        # Validate inputs
-        if not user_input or not user_input.strip():
-            raise exc.ValidationError("user_input", "must not be empty")
-        if max_tool_rounds < 1:
-            raise exc.ValidationError("max_tool_rounds", "must be at least 1")
-        if max_retries < 0:
-            raise exc.ValidationError("max_retries", "must be non-negative")
-        if timeout is not None and timeout <= 0:
-            raise exc.ValidationError("timeout", "must be positive")
+        logger.info(
+            "Advancing agent: id=%s, name=%s, model=%s",
+            agent.id,
+            agent.name,
+            agent.model,
+        )
+
+        # Load conversation and system prompt
+        conversation = await self._get_conversation(agent.conversation_id)
+        if conversation is None:
+            raise exc.ConversationNotFoundError(agent.conversation_id)
+
+        system_prompt = await self._get_system_prompt(agent.system_prompt_id)
+        if system_prompt is None:
+            raise exc.SystemPromptNotFoundError(agent.system_prompt_id)
+
+        # Load existing messages
+        history = await self._get_messages(conversation.message_ids)
 
         # Build effective model config: agent defaults + call overrides
         effective_config = dict(agent.model_config)
@@ -809,89 +817,33 @@ class Store:
         if top_p is not None:
             effective_config["top_p"] = top_p
 
-        logger.info(
-            "Advancing agent: id=%s, name=%s, model=%s",
-            agent.id,
-            agent.name,
-            agent.model,
+        # Run LLM orchestration (pure function, no persistence)
+        new_messages = await advance_mod.advance(
+            model=agent.model,
+            system_prompt=system_prompt.content,
+            history=history,
+            user_input=user_input,
+            mcp=mcp,
+            max_tool_rounds=max_tool_rounds,
+            max_retries=max_retries,
+            timeout=timeout,
+            model_config=effective_config,
         )
-
-        # Load existing conversation and system prompt
-        conversation = await self._get_conversation(agent.conversation_id)
-        if conversation is None:
-            raise exc.ConversationNotFoundError(agent.conversation_id)
-
-        system_prompt = await self._get_system_prompt(agent.system_prompt_id)
-        if system_prompt is None:
-            raise exc.SystemPromptNotFoundError(agent.system_prompt_id)
-
-        # Load existing messages
-        msgs = await self._get_messages(conversation.message_ids)
-        logger.debug("Loaded %d existing messages", len(msgs))
-
-        # Create user message
-        user_message = messages.Message.user(user_input)
-        msgs.append(user_message)
-
-        # Get tools if MCP is available
-        tools = mcp.get_all_tools() if mcp else None
-
-        # New messages created in this turn
-        new_messages: list[messages.Message] = [user_message]
-
-        # Tool loop - each iteration is one LLM call, possibly followed by tool execution
-        llm_calls = 0
-        for _ in range(max_tool_rounds):
-            # Call LLM
-            assistant_message = await llm.complete(
-                model=agent.model,
-                msgs=msgs,
-                system=system_prompt.content,
-                tools=tools,
-                max_retries=max_retries,
-                timeout=timeout,
-                model_config=effective_config,
-            )
-            llm_calls += 1
-            msgs.append(assistant_message)
-            new_messages.append(assistant_message)
-
-            # Check for tool calls
-            if not assistant_message.tool_calls or not mcp:
-                break
-
-            # Execute tool calls concurrently
-            async def execute_one(tc: messages.ToolCall) -> messages.Message:
-                try:
-                    result = await mcp.execute(tc.name, tc.arguments)
-                except exc.ToolExecutionError as e:
-                    result = f"Error: {e}"
-                return messages.Message.tool_result(tc.id, result)
-
-            tool_results = await asyncio.gather(
-                *(execute_one(tc) for tc in assistant_message.tool_calls)
-            )
-            for tool_result_message in tool_results:
-                msgs.append(tool_result_message)
-                new_messages.append(tool_result_message)
 
         # Create new conversation with all message IDs
         new_conversation = conversation.with_messages(*[m.id for m in new_messages])
 
-        # Create new agent state (also registers with this store)
+        # Create new agent state
         new_agent = agent._evolve(new_conversation)
 
-        # Cache new assets first (save() looks up dependencies in cache)
+        # Cache and save
         self._cache_all(*new_messages, new_conversation, new_agent)
-
-        # Save to database
         await self._save(new_agent)
 
         logger.info(
-            "Agent advanced: old_id=%s, new_id=%s, llm_calls=%d, new_messages=%d",
+            "Agent advanced: old_id=%s, new_id=%s, new_messages=%d",
             agent.id,
             new_agent.id,
-            llm_calls,
             len(new_messages),
         )
 
