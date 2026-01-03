@@ -24,6 +24,22 @@ import immagent.messages as messages
 from immagent.agent import ImmAgent
 from immagent.logging import logger
 
+# Registry mapping agent IDs to their stores
+_agent_stores: dict[UUID, "Store"] = {}
+
+
+def _get_store(agent_id: UUID) -> "Store":
+    """Get the store for an agent by ID."""
+    store = _agent_stores.get(agent_id)
+    if store is None:
+        raise RuntimeError(f"Agent {agent_id} not associated with a store")
+    return store
+
+
+def _register_agent(agent_id: UUID, store: "Store") -> None:
+    """Register an agent with its store."""
+    _agent_stores[agent_id] = store
+
 SCHEMA = """
 -- Text assets (system prompts, etc.)
 CREATE TABLE IF NOT EXISTS text_assets (
@@ -188,6 +204,31 @@ class Store:
             output_tokens=row["output_tokens"],
         )
 
+    def _agent_from_row(self, row: asyncpg.Record) -> ImmAgent:
+        """Build an ImmAgent from a database row."""
+        agent = ImmAgent(
+            id=row["id"],
+            created_at=row["created_at"],
+            name=row["name"],
+            system_prompt_id=row["system_prompt_id"],
+            parent_id=row["parent_id"],
+            conversation_id=row["conversation_id"],
+            model=row["model"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            model_config=json.loads(row["model_config"]) if row["model_config"] else {},
+        )
+        _register_agent(agent.id, self)
+        return agent
+
+    def _get_or_build_agent(self, row: asyncpg.Record) -> ImmAgent:
+        """Get agent from cache or build from row and cache it."""
+        cached = self._get_cached(row["id"])
+        if cached is not None and isinstance(cached, ImmAgent):
+            return cached
+        agent = self._agent_from_row(row)
+        self._cache_asset(agent)
+        return agent
+
     async def _get_system_prompt(self, asset_id: UUID) -> assets.SystemPrompt | None:
         cached = self._get_cached(asset_id)
         if cached is not None:
@@ -306,20 +347,7 @@ class Store:
                 agent_id,
             )
             if row:
-                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
-                agent = ImmAgent(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    name=row["name"],
-                    system_prompt_id=row["system_prompt_id"],
-                    parent_id=row["parent_id"],
-                    conversation_id=row["conversation_id"],
-                    model=row["model"],
-                    metadata=metadata,
-                    model_config=model_config,
-                    _store=self,
-                )
+                agent = self._agent_from_row(row)
                 self._cache_asset(agent)
                 return agent
         return None
@@ -489,16 +517,17 @@ class Store:
 
         prompt_asset = assets.SystemPrompt.create(system_prompt)
         conversation = messages.Conversation.create()
-        model_str = model
         agent = ImmAgent._create(
             name=name,
             system_prompt_id=prompt_asset.id,
             conversation_id=conversation.id,
-            model=model_str,
-            store=self,
+            model=model,
             metadata=metadata,
             model_config=model_config,
         )
+
+        # Register agent with this store
+        _register_agent(agent.id, self)
 
         # Cache first (_save() looks up dependencies in cache)
         self._cache_all(prompt_asset, conversation, agent)
@@ -565,20 +594,7 @@ class Store:
                     to_load,
                 )
             for row in rows:
-                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
-                agent = ImmAgent(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    name=row["name"],
-                    system_prompt_id=row["system_prompt_id"],
-                    parent_id=row["parent_id"],
-                    conversation_id=row["conversation_id"],
-                    model=row["model"],
-                    metadata=metadata,
-                    model_config=model_config,
-                    _store=self,
-                )
+                agent = self._agent_from_row(row)
                 self._cache_asset(agent)
                 agents_by_id[agent.id] = agent
 
@@ -656,31 +672,7 @@ class Store:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *args)
 
-        agents = []
-        for row in rows:
-            # Check cache first
-            cached = self._get_cached(row["id"])
-            if cached is not None and isinstance(cached, ImmAgent):
-                agents.append(cached)
-            else:
-                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
-                agent = ImmAgent(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    name=row["name"],
-                    system_prompt_id=row["system_prompt_id"],
-                    parent_id=row["parent_id"],
-                    conversation_id=row["conversation_id"],
-                    model=row["model"],
-                    metadata=metadata,
-                    model_config=model_config,
-                    _store=self,
-                )
-                self._cache_asset(agent)
-                agents.append(agent)
-
-        return agents
+        return [self._get_or_build_agent(row) for row in rows]
 
     async def count_agents(self, *, name: str | None = None) -> int:
         """Count total number of agents.
@@ -742,30 +734,7 @@ class Store:
                 name,
             )
 
-        agents = []
-        for row in rows:
-            cached = self._get_cached(row["id"])
-            if cached is not None and isinstance(cached, ImmAgent):
-                agents.append(cached)
-            else:
-                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
-                agent = ImmAgent(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    name=row["name"],
-                    system_prompt_id=row["system_prompt_id"],
-                    parent_id=row["parent_id"],
-                    conversation_id=row["conversation_id"],
-                    model=row["model"],
-                    metadata=metadata,
-                    model_config=model_config,
-                    _store=self,
-                )
-                self._cache_asset(agent)
-                agents.append(agent)
-
-        return agents
+        return [self._get_or_build_agent(row) for row in rows]
 
     async def gc(self) -> dict[str, int]:
         """Garbage collect orphaned assets.
@@ -785,25 +754,29 @@ class Store:
             async with conn.transaction():
                 # Delete orphaned text_assets (system prompts not used by any agent)
                 deleted = await conn.fetch("""
-                    DELETE FROM text_assets
-                    WHERE id NOT IN (SELECT system_prompt_id FROM agents)
+                    DELETE FROM text_assets t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM agents a WHERE a.system_prompt_id = t.id
+                    )
                     RETURNING id
                 """)
                 text_assets_count = len(deleted)
 
                 # Delete orphaned conversations
                 deleted = await conn.fetch("""
-                    DELETE FROM conversations
-                    WHERE id NOT IN (SELECT conversation_id FROM agents)
+                    DELETE FROM conversations c
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM agents a WHERE a.conversation_id = c.id
+                    )
                     RETURNING id
                 """)
                 conversations_count = len(deleted)
 
                 # Delete orphaned messages
                 deleted = await conn.fetch("""
-                    DELETE FROM messages
-                    WHERE id NOT IN (
-                        SELECT unnest(message_ids) FROM conversations
+                    DELETE FROM messages m
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM conversations c WHERE m.id = ANY(c.message_ids)
                     )
                     RETURNING id
                 """)
@@ -923,6 +896,9 @@ class Store:
         # Create new agent state
         new_agent = agent._evolve(new_conversation)
 
+        # Register new agent with this store
+        _register_agent(new_agent.id, self)
+
         # Cache new assets first (save() looks up dependencies in cache)
         self._cache_all(*new_messages, new_conversation, new_agent)
 
@@ -965,8 +941,8 @@ class Store:
             model=agent.model,
             metadata=agent.metadata,
             model_config=agent.model_config,
-            _store=self,
         )
+        _register_agent(new_agent.id, self)
         self._cache_asset(new_agent)
         await self._save(new_agent)
         return new_agent
@@ -986,8 +962,8 @@ class Store:
             model=agent.model,
             metadata=metadata,
             model_config=agent.model_config,
-            _store=self,
         )
+        _register_agent(new_agent.id, self)
         self._cache_asset(new_agent)
         await self._save(new_agent)
         return new_agent
@@ -1035,30 +1011,7 @@ class Store:
             raise exc.AgentNotFoundError(agent.id)
 
         # Build agents and cache them (rows are child-first, reverse for root-first)
-        lineage = []
-        for row in rows:
-            # Check cache first
-            cached = self._get_cached(row["id"])
-            if cached is not None and isinstance(cached, ImmAgent):
-                lineage.append(cached)
-            else:
-                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                model_config = json.loads(row["model_config"]) if row["model_config"] else {}
-                loaded = ImmAgent(
-                    id=row["id"],
-                    created_at=row["created_at"],
-                    name=row["name"],
-                    system_prompt_id=row["system_prompt_id"],
-                    parent_id=row["parent_id"],
-                    conversation_id=row["conversation_id"],
-                    model=row["model"],
-                    metadata=metadata,
-                    model_config=model_config,
-                    _store=self,
-                )
-                self._cache_asset(loaded)
-                lineage.append(loaded)
-
+        lineage = [self._get_or_build_agent(row) for row in rows]
         lineage.reverse()
         return lineage
 
@@ -1066,8 +1019,12 @@ class Store:
 class MemoryStore(Store):
     """In-memory store with no database persistence.
 
-    Assets persist until explicitly deleted or the store is closed.
-    Useful for experimentation, testing, or stateless use cases.
+    Intended for short-lived use: tests, scripts, experimentation.
+    Not suitable for long-running processes — assets accumulate in memory
+    and are never garbage collected (each turn creates new messages,
+    conversations, and agents that remain in the cache indefinitely).
+
+    For production use, use Store with PostgreSQL instead.
 
     Usage:
         async with MemoryStore() as store:
@@ -1081,5 +1038,4 @@ class MemoryStore(Store):
 
     def __init__(self) -> None:
         super().__init__(pool=None)
-        # Use strong references since there's no DB fallback
         self._cache: MutableMapping[UUID, assets.Asset] = {}
