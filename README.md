@@ -74,7 +74,6 @@ asyncio.run(main())
 | Method | Description |
 |--------|-------------|
 | `Store.connect(dsn)` | Connect to PostgreSQL |
-| `MemoryStore()` | In-memory store (no database) |
 | `store.init_schema()` | Create tables if not exist |
 | `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
@@ -155,15 +154,6 @@ store = await immagent.Store.connect(
     max_size=10,                         # Max pool connections (default: 10)
     max_inactive_connection_lifetime=300, # Idle timeout in seconds (default: 300)
 )
-```
-
-For experimentation or stateless use cases, use `MemoryStore`:
-
-```python
-async with immagent.MemoryStore() as store:
-    agent = await store.create_agent(...)
-    agent = await agent.advance("Hello!")
-    # Agents exist only while referenced — no persistence
 ```
 
 ### Assets

@@ -21,7 +21,7 @@ from immagent.mcp import MCPManager
 from immagent.messages import Conversation, Message, ToolCall
 from immagent.persistent import PersistentAgent
 from immagent.simple import SimpleAgent
-from immagent.store import MemoryStore, Store
+from immagent.store import Store
 
 __all__ = [
     # Core types
@@ -33,7 +33,6 @@ __all__ = [
     "SystemPrompt",
     # Store (main interface)
     "Store",
-    "MemoryStore",
     # MCP
     "MCPManager",
     # Models
