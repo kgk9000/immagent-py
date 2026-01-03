@@ -39,6 +39,9 @@ class ImmAgent(assets.Asset):
     metadata: dict[str, Any] = field(default_factory=dict)
     model_config: dict[str, Any] = field(default_factory=dict)
 
+    def __hash__(self) -> int:
+        return hash(self.id)
+
     @classmethod
     def _create(
         cls,
@@ -89,7 +92,7 @@ class ImmAgent(assets.Asset):
             model_config=self.model_config,
         )
         # Register new agent with the same store as the parent
-        register_agent(new_agent.id, get_store(self.id))
+        register_agent(new_agent, get_store(self))
         return new_agent
 
     async def with_metadata(self, metadata: dict[str, Any]) -> ImmAgent:
@@ -104,7 +107,7 @@ class ImmAgent(assets.Asset):
         Returns:
             A new agent with updated metadata
         """
-        return await get_store(self.id)._update_metadata(self, metadata)
+        return await get_store(self)._update_metadata(self, metadata)
 
     async def advance(
         self,
@@ -133,7 +136,7 @@ class ImmAgent(assets.Asset):
             max_tokens: Override max_tokens for this call (default: use agent's model_config)
             top_p: Override top_p for this call (default: use agent's model_config)
         """
-        return await get_store(self.id)._advance(
+        return await get_store(self)._advance(
             self,
             user_input,
             mcp=mcp,
@@ -147,11 +150,11 @@ class ImmAgent(assets.Asset):
 
     async def get_messages(self) -> list[messages.Message]:
         """Get all messages in this agent's conversation."""
-        return await get_store(self.id)._get_agent_messages(self)
+        return await get_store(self)._get_agent_messages(self)
 
     async def get_lineage(self) -> list[ImmAgent]:
         """Get the chain of agents from root to this agent."""
-        return await get_store(self.id)._get_agent_lineage(self)
+        return await get_store(self)._get_agent_lineage(self)
 
     async def clone(self) -> ImmAgent:
         """Create a clone of this agent for branching.
@@ -159,7 +162,7 @@ class ImmAgent(assets.Asset):
         The clone shares the same parent, conversation, and system prompt,
         allowing you to advance it in a different direction.
         """
-        return await get_store(self.id)._clone_agent(self)
+        return await get_store(self)._clone_agent(self)
 
     async def get_token_usage(self) -> tuple[int, int]:
         """Get total token usage for this agent's conversation.

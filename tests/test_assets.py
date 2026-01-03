@@ -131,7 +131,7 @@ class TestImmAgent:
             conversation_id=conv.id,
             model="anthropic/claude-sonnet-4-20250514",
         )
-        register_agent(agent.id, store)
+        register_agent(agent, store)
         await store._save(agent)
         store.clear_cache()
 
@@ -156,7 +156,7 @@ class TestImmAgent:
             conversation_id=conv1.id,
             model="anthropic/claude-sonnet-4-20250514",
         )
-        register_agent(agent1.id, store)
+        register_agent(agent1, store)
         await store._save(agent1)
 
         # Evolve with new conversation
@@ -189,7 +189,7 @@ class TestMemoryStore:
             )
 
             assert agent.name == "TestBot"
-            assert get_store(agent.id) is store
+            assert get_store(agent) is store
 
     async def test_cache_only(self):
         """Memory store uses only cache, no database."""

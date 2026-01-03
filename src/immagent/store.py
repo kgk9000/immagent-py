@@ -202,7 +202,7 @@ class Store:
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             model_config=json.loads(row["model_config"]) if row["model_config"] else {},
         )
-        register_agent(agent.id, self)
+        register_agent(agent, self)
         return agent
 
     def _get_or_build_agent(self, row: asyncpg.Record) -> ImmAgent:
@@ -512,7 +512,7 @@ class Store:
         )
 
         # Register agent with this store
-        register_agent(agent.id, self)
+        register_agent(agent, self)
 
         # Cache first (_save() looks up dependencies in cache)
         self._cache_all(prompt_asset, conversation, agent)
@@ -924,7 +924,7 @@ class Store:
             metadata=agent.metadata,
             model_config=agent.model_config,
         )
-        register_agent(new_agent.id, self)
+        register_agent(new_agent, self)
         self._cache_asset(new_agent)
         await self._save(new_agent)
         return new_agent
@@ -945,7 +945,7 @@ class Store:
             metadata=metadata,
             model_config=agent.model_config,
         )
-        register_agent(new_agent.id, self)
+        register_agent(new_agent, self)
         self._cache_asset(new_agent)
         await self._save(new_agent)
         return new_agent
