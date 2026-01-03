@@ -1,4 +1,4 @@
-"""The immutable agent type."""
+"""Persistent agent with database storage."""
 
 from __future__ import annotations
 
@@ -16,11 +16,15 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class ImmAgent(assets.Asset):
-    """An immutable agent.
+class PersistentAgent(assets.Asset):
+    """Database-backed agent with full history tracking.
 
-    Every state transition (e.g., processing a turn) creates a new ImmAgent
-    with a new UUID. The parent_id links to the previous state.
+    Every state transition creates a new PersistentAgent with a new UUID.
+    The parent_id links to the previous state, enabling full lineage traversal.
+
+    Create via Store:
+        agent = await store.create_agent(name="Bot", system_prompt="...", model="...")
+        agent = await agent.advance("Hello!")
 
     Attributes:
         name: Human-readable name for the agent
@@ -51,7 +55,7 @@ class ImmAgent(assets.Asset):
         return hash(self.id)
 
     @classmethod
-    def from_row(cls, row: Any) -> "ImmAgent":
+    def from_row(cls, row: Any) -> "PersistentAgent":
         """Construct from a database row."""
         return cls(
             id=row["id"],
@@ -94,7 +98,7 @@ class ImmAgent(assets.Asset):
         model: str,
         metadata: dict[str, Any] | None = None,
         model_config: dict[str, Any] | None = None,
-    ) -> ImmAgent:
+    ) -> PersistentAgent:
         """Create a new agent (internal).
 
         Takes IDs of pre-created dependencies. Caller is responsible for
@@ -116,13 +120,13 @@ class ImmAgent(assets.Asset):
         self,
         conversation: messages.Conversation,
         metadata: dict[str, Any] | None = None,
-    ) -> ImmAgent:
+    ) -> PersistentAgent:
         """Create a new agent state with an updated conversation (internal).
 
         The new agent links back to this one via parent_id.
         Metadata and model_config are inherited from the current agent.
         """
-        new_agent = ImmAgent(
+        new_agent = PersistentAgent(
             id=assets.new_id(),
             created_at=assets.now(),
             name=self.name,
@@ -137,7 +141,7 @@ class ImmAgent(assets.Asset):
         register_agent(new_agent, get_store(self))
         return new_agent
 
-    async def with_metadata(self, metadata: dict[str, Any]) -> ImmAgent:
+    async def with_metadata(self, metadata: dict[str, Any]) -> PersistentAgent:
         """Create a new agent with updated metadata.
 
         The new agent has the same conversation but new metadata.
@@ -162,7 +166,7 @@ class ImmAgent(assets.Asset):
         temperature: float | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
-    ) -> ImmAgent:
+    ) -> PersistentAgent:
         """Process a user message and return a new agent with the response.
 
         Calls the LLM, handles any tool calls, and creates a new agent
@@ -194,11 +198,11 @@ class ImmAgent(assets.Asset):
         """Get all messages in this agent's conversation."""
         return await get_store(self)._get_agent_messages(self)
 
-    async def get_lineage(self) -> list[ImmAgent]:
+    async def get_lineage(self) -> list[PersistentAgent]:
         """Get the chain of agents from root to this agent."""
         return await get_store(self)._get_agent_lineage(self)
 
-    async def clone(self) -> ImmAgent:
+    async def clone(self) -> PersistentAgent:
         """Create a clone of this agent for branching.
 
         The clone shares the same parent, conversation, and system prompt,

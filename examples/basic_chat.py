@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive chat example using ImmAgent.
+"""Interactive chat example using PersistentAgent.
 
 Requires:
     - Docker running (for automatic PostgreSQL)

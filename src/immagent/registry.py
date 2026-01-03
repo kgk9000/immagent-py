@@ -1,6 +1,6 @@
 """Agent-to-store registry.
 
-This module breaks the circular import between agent.py and store.py
+This module breaks the circular import between persistent.py and store.py
 by providing a central registry that both can import.
 
 Uses WeakKeyDictionary so agents are automatically removed from the
@@ -11,13 +11,13 @@ import weakref
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from immagent.agent import ImmAgent
+    from immagent.persistent import PersistentAgent
     from immagent.store import Store
 
-_agent_stores: weakref.WeakKeyDictionary["ImmAgent", "Store"] = weakref.WeakKeyDictionary()
+_agent_stores: weakref.WeakKeyDictionary["PersistentAgent", "Store"] = weakref.WeakKeyDictionary()
 
 
-def get_store(agent: "ImmAgent") -> "Store":
+def get_store(agent: "PersistentAgent") -> "Store":
     """Get the store for an agent."""
     store = _agent_stores.get(agent)
     if store is None:
@@ -25,6 +25,6 @@ def get_store(agent: "ImmAgent") -> "Store":
     return store
 
 
-def register_agent(agent: "ImmAgent", store: "Store") -> None:
+def register_agent(agent: "PersistentAgent", store: "Store") -> None:
     """Register an agent with its store."""
     _agent_stores[agent] = store

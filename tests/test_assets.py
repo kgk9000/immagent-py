@@ -1,7 +1,7 @@
 """Tests for asset persistence and retrieval."""
 
 from immagent import MemoryStore, Store
-from immagent.agent import ImmAgent
+from immagent.persistent import PersistentAgent
 from immagent.assets import SystemPrompt
 from immagent.llm import Model
 from immagent.messages import Conversation, Message, ToolCall
@@ -116,7 +116,7 @@ class TestConversation:
         assert conv2.message_ids == (msg.id,)
 
 
-class TestImmAgent:
+class TestPersistentAgent:
     async def test_create_agent(self, store: Store):
         """Agent can be created and saved."""
         from immagent.registry import register_agent
@@ -125,7 +125,7 @@ class TestImmAgent:
         conv = Conversation.create()
         await store._save(prompt, conv)
 
-        agent = ImmAgent._create(
+        agent = PersistentAgent._create(
             name="TestBot",
             system_prompt_id=prompt.id,
             conversation_id=conv.id,
@@ -150,7 +150,7 @@ class TestImmAgent:
         conv1 = Conversation.create()
         await store._save(prompt, conv1)
 
-        agent1 = ImmAgent._create(
+        agent1 = PersistentAgent._create(
             name="TestBot",
             system_prompt_id=prompt.id,
             conversation_id=conv1.id,

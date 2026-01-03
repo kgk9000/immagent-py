@@ -4,23 +4,23 @@ An immutable agent architecture for Python. Every state transition creates a new
 
 ## Quick Start
 
-### Ephemeral Agent (Simple)
+### SimpleAgent
 
 For quick scripts and experimentation—no database, no UUIDs, just chat:
 
 ```python
 import asyncio
-from immagent import Agent
+from immagent import SimpleAgent
 
 async def main():
-    agent = Agent(
+    agent = SimpleAgent(
         name="Assistant",
         system_prompt="You are helpful.",
         model="anthropic/claude-3-5-haiku-20241022",
     )
 
-    await agent.advance("Hello!")  # Mutates in place
-    await agent.advance("What's 2+2?")
+    agent = await agent.advance("Hello!")
+    agent = await agent.advance("What's 2+2?")
 
     for msg in agent.messages:
         print(f"{msg.role}: {msg.content}")
@@ -28,7 +28,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Persistent Agent (Immutable)
+### PersistentAgent
 
 For production use with full history and database persistence:
 
@@ -59,17 +59,17 @@ asyncio.run(main())
 
 ## Public API
 
-### Ephemeral Agent
+### SimpleAgent
 
 | Method | Description |
 |--------|-------------|
-| `Agent(name, system_prompt, model)` | Create an ephemeral agent |
-| `agent.advance(input)` | Process input and mutate in place |
+| `SimpleAgent(name, system_prompt, model)` | Create an in-memory agent |
+| `agent.advance(input)` | Process input and return new agent |
 | `agent.messages` | Get all messages |
 | `agent.last_response` | Get last assistant response |
 | `agent.get_token_usage()` | Get (input_tokens, output_tokens) |
 
-### Persistent Agent (Store + ImmAgent)
+### PersistentAgent (with Store)
 
 | Method | Description |
 |--------|-------------|
@@ -108,11 +108,11 @@ Because everything is immutable:
 
 ## Two Agent Types
 
-| | `Agent` (Ephemeral) | `ImmAgent` (Persistent) |
+| | `SimpleAgent` | `PersistentAgent` |
 |---|---|---|
 | **Use case** | Quick scripts, experimentation | Production with full history |
 | **Persistence** | None (in-memory only) | PostgreSQL |
-| **Mutability** | Mutable (`advance()` modifies in place) | Immutable (`advance()` returns new agent) |
+| **API** | `advance()` returns new agent | `advance()` returns new agent |
 | **IDs** | None | UUID for every state |
 | **Lineage** | None | Full parent chain |
 
@@ -181,13 +181,13 @@ Asset types:
 - `SystemPrompt` — the agent's system prompt
 - `Message` — user, assistant, or tool messages
 - `Conversation` — ordered list of message IDs
-- `ImmAgent` — the agent itself
+- `PersistentAgent` — the agent itself
 
-### ImmAgent
+### PersistentAgent
 
 ```python
 @dataclass(frozen=True)
-class ImmAgent(Asset):
+class PersistentAgent(Asset):
     name: str
     system_prompt_id: UUID      # References a SystemPrompt
     parent_id: UUID | None      # Previous agent state
@@ -220,7 +220,7 @@ lineage = await agent.get_lineage()
 3. Call the LLM (via LiteLLM)
 4. If tool calls requested, execute via MCP and loop
 5. Create new `Conversation` with all messages
-6. Create new `ImmAgent` with `parent_id` pointing to the old agent
+6. Create new `PersistentAgent` with `parent_id` pointing to the old agent
 7. Save to database and cache
 8. Return the new agent
 
@@ -450,15 +450,15 @@ make test
 src/immagent/
 ├── __init__.py     # Public API exports
 ├── advance.py      # Pure LLM orchestration (no persistence)
-├── agent.py        # ImmAgent dataclass with methods
 ├── assets.py       # Asset base class, SystemPrompt
-├── ephemeral.py    # Simple mutable Agent for quick scripts
 ├── exceptions.py   # Custom exception types
 ├── llm.py          # LiteLLM wrapper with retries/timeout
 ├── logging.py      # Logging configuration
 ├── mcp.py          # MCP client for tools
 ├── messages.py     # Message, ToolCall, Conversation
+├── persistent.py   # PersistentAgent dataclass
 ├── registry.py     # Agent-to-store mapping (WeakKeyDictionary)
+├── simple.py       # SimpleAgent for quick scripts
 └── store.py        # Store (main interface - cache + db)
 ```
 
@@ -478,7 +478,7 @@ src/immagent/
 ### Why Immutability?
 
 ```
-ImmAgent ──→ Conversation ──→ [Message UUIDs] ──→ Messages
+PersistentAgent ──→ Conversation ──→ [Message UUIDs] ──→ Messages
     │
     ├──→ SystemPrompt
     │

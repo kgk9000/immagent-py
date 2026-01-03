@@ -19,7 +19,7 @@ import immagent.assets as assets
 import immagent.exceptions as exc
 import immagent.mcp as mcp_mod
 import immagent.messages as messages
-from immagent.agent import ImmAgent
+from immagent.persistent import PersistentAgent
 from immagent.logging import logger
 from immagent.registry import register_agent
 
@@ -167,12 +167,12 @@ class Store:
 
     # -- Load operations (cache + db) --
 
-    def _get_or_build_agent(self, row: asyncpg.Record) -> ImmAgent:
+    def _get_or_build_agent(self, row: asyncpg.Record) -> PersistentAgent:
         """Get agent from cache or build from row and cache it."""
         cached = self._get_cached(row["id"])
-        if cached is not None and isinstance(cached, ImmAgent):
+        if cached is not None and isinstance(cached, PersistentAgent):
             return cached
-        agent = ImmAgent.from_row(row)
+        agent = PersistentAgent.from_row(row)
         register_agent(agent, self)
         self._cache_asset(agent)
         return agent
@@ -259,18 +259,18 @@ class Store:
                 return conv
         return None
 
-    async def _get_agent(self, agent_id: UUID) -> ImmAgent | None:
+    async def _get_agent(self, agent_id: UUID) -> PersistentAgent | None:
         cached = self._get_cached(agent_id)
         if cached is not None:
-            return cached if isinstance(cached, ImmAgent) else None
+            return cached if isinstance(cached, PersistentAgent) else None
 
         if self._pool is None:
             return None
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(ImmAgent.SELECT_SQL, agent_id)
+            row = await conn.fetchrow(PersistentAgent.SELECT_SQL, agent_id)
             if row:
-                agent = ImmAgent.from_row(row)
+                agent = PersistentAgent.from_row(row)
                 register_agent(agent, self)
                 self._cache_asset(agent)
                 return agent
@@ -288,7 +288,7 @@ class Store:
         """Save assets to the database atomically (internal).
 
         All assets are saved in a single transaction.
-        When saving an ImmAgent, its dependencies (system prompt, conversation)
+        When saving an PersistentAgent, its dependencies (system prompt, conversation)
         are automatically saved first if they're in the cache.
 
         For in-memory stores (no pool), only caches the assets.
@@ -305,7 +305,7 @@ class Store:
                 continue
 
             # For agents, add dependencies first (order matters for foreign keys)
-            if isinstance(asset, ImmAgent):
+            if isinstance(asset, PersistentAgent):
                 # Add system prompt if in cache
                 prompt = self._get_cached(asset.system_prompt_id)
                 if prompt is not None and prompt.id not in seen:
@@ -348,7 +348,7 @@ class Store:
         model: str,
         metadata: dict[str, Any] | None = None,
         model_config: dict[str, Any] | None = None,
-    ) -> ImmAgent:
+    ) -> PersistentAgent:
         """Create a new agent with an empty conversation.
 
         The agent is saved immediately and cached.
@@ -376,7 +376,7 @@ class Store:
 
         prompt_asset = assets.SystemPrompt.create(system_prompt)
         conversation = messages.Conversation.create()
-        agent = ImmAgent._create(
+        agent = PersistentAgent._create(
             name=name,
             system_prompt_id=prompt_asset.id,
             conversation_id=conversation.id,
@@ -396,7 +396,7 @@ class Store:
 
         return agent
 
-    async def load_agent(self, agent_id: UUID) -> ImmAgent:
+    async def load_agent(self, agent_id: UUID) -> PersistentAgent:
         """Load an agent by ID.
 
         Args:
@@ -413,7 +413,7 @@ class Store:
             raise exc.AgentNotFoundError(agent_id)
         return agent
 
-    async def load_agents(self, agent_ids: list[UUID]) -> list[ImmAgent]:
+    async def load_agents(self, agent_ids: list[UUID]) -> list[PersistentAgent]:
         """Load multiple agents by ID in a single batch.
 
         More efficient than calling load_agent() multiple times.
@@ -430,13 +430,13 @@ class Store:
         if not agent_ids:
             return []
 
-        agents_by_id: dict[UUID, ImmAgent] = {}
+        agents_by_id: dict[UUID, PersistentAgent] = {}
         to_load: list[UUID] = []
 
         # Check cache first
         for aid in agent_ids:
             cached = self._get_cached(aid)
-            if cached is not None and isinstance(cached, ImmAgent):
+            if cached is not None and isinstance(cached, PersistentAgent):
                 agents_by_id[aid] = cached
             else:
                 to_load.append(aid)
@@ -453,13 +453,13 @@ class Store:
                     to_load,
                 )
             for row in rows:
-                agent = ImmAgent.from_row(row)
+                agent = PersistentAgent.from_row(row)
                 register_agent(agent, self)
                 self._cache_asset(agent)
                 agents_by_id[agent.id] = agent
 
         # Verify all agents were found and return in order
-        result: list[ImmAgent] = []
+        result: list[PersistentAgent] = []
         for aid in agent_ids:
             if aid not in agents_by_id:
                 raise exc.AgentNotFoundError(aid)
@@ -467,7 +467,7 @@ class Store:
 
         return result
 
-    async def delete(self, agent: ImmAgent) -> None:
+    async def delete(self, agent: PersistentAgent) -> None:
         """Delete an agent from the database and cache.
 
         Only deletes the agent record. Use gc() to clean up orphaned assets.
@@ -488,7 +488,7 @@ class Store:
         limit: int = 100,
         offset: int = 0,
         name: str | None = None,
-    ) -> list[ImmAgent]:
+    ) -> list[PersistentAgent]:
         """List agents with pagination and optional filtering.
 
         Args:
@@ -501,7 +501,7 @@ class Store:
         """
         if self._pool is None:
             # MemoryStore: filter in-memory cache
-            agents = [a for a in self._cache.values() if isinstance(a, ImmAgent)]
+            agents = [a for a in self._cache.values() if isinstance(a, PersistentAgent)]
             if name:
                 name_lower = name.lower()
                 agents = [a for a in agents if name_lower in a.name.lower()]
@@ -545,7 +545,7 @@ class Store:
         """
         if self._pool is None:
             # MemoryStore: count in-memory cache
-            agents = [a for a in self._cache.values() if isinstance(a, ImmAgent)]
+            agents = [a for a in self._cache.values() if isinstance(a, PersistentAgent)]
             if name:
                 name_lower = name.lower()
                 agents = [a for a in agents if name_lower in a.name.lower()]
@@ -563,7 +563,7 @@ class Store:
 
         return count or 0
 
-    async def find_by_name(self, name: str) -> list[ImmAgent]:
+    async def find_by_name(self, name: str) -> list[PersistentAgent]:
         """Find agents by exact name match.
 
         Args:
@@ -576,7 +576,7 @@ class Store:
             # MemoryStore: filter in-memory cache
             agents = [
                 a for a in self._cache.values()
-                if isinstance(a, ImmAgent) and a.name == name
+                if isinstance(a, PersistentAgent) and a.name == name
             ]
             agents.sort(key=lambda a: a.created_at, reverse=True)
             return agents
@@ -650,7 +650,7 @@ class Store:
 
     async def _advance(
         self,
-        agent: ImmAgent,
+        agent: PersistentAgent,
         user_input: str,
         *,
         mcp: mcp_mod.MCPManager | None = None,
@@ -660,7 +660,7 @@ class Store:
         temperature: float | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
-    ) -> ImmAgent:
+    ) -> PersistentAgent:
         """Advance the agent with a user message (internal).
 
         Use agent.advance() instead.
@@ -725,7 +725,7 @@ class Store:
 
         return new_agent
 
-    async def _get_agent_messages(self, agent: ImmAgent) -> list[messages.Message]:
+    async def _get_agent_messages(self, agent: PersistentAgent) -> list[messages.Message]:
         """Get all messages in an agent's conversation (internal).
 
         Use agent.get_messages() instead.
@@ -735,13 +735,13 @@ class Store:
             raise exc.ConversationNotFoundError(agent.conversation_id)
         return await self._get_messages(conversation.message_ids)
 
-    async def _clone_agent(self, agent: ImmAgent) -> ImmAgent:
+    async def _clone_agent(self, agent: PersistentAgent) -> PersistentAgent:
         """Create a clone of an agent for branching.
 
         The clone shares the same parent, conversation, and system prompt,
         allowing you to advance it in a different direction from the original.
         """
-        new_agent = ImmAgent(
+        new_agent = PersistentAgent(
             id=assets.new_id(),
             created_at=assets.now(),
             name=agent.name,
@@ -757,12 +757,12 @@ class Store:
         await self._save(new_agent)
         return new_agent
 
-    async def _update_metadata(self, agent: ImmAgent, metadata: dict[str, Any]) -> ImmAgent:
+    async def _update_metadata(self, agent: PersistentAgent, metadata: dict[str, Any]) -> PersistentAgent:
         """Create a new agent with updated metadata (internal).
 
         Use agent.with_metadata() instead.
         """
-        new_agent = ImmAgent(
+        new_agent = PersistentAgent(
             id=assets.new_id(),
             created_at=assets.now(),
             name=agent.name,
@@ -778,7 +778,7 @@ class Store:
         await self._save(new_agent)
         return new_agent
 
-    async def _get_agent_lineage(self, agent: ImmAgent) -> list[ImmAgent]:
+    async def _get_agent_lineage(self, agent: PersistentAgent) -> list[PersistentAgent]:
         """Get the agent's lineage (internal).
 
         Use agent.get_lineage() instead.
@@ -787,7 +787,7 @@ class Store:
         """
         if self._pool is None:
             # MemoryStore: fall back to iterative traversal
-            lineage: list[ImmAgent] = [agent]
+            lineage: list[PersistentAgent] = [agent]
             current = agent
             while current.parent_id is not None:
                 parent = await self._get_agent(current.parent_id)
