@@ -6,6 +6,7 @@ creates a new agent with a fresh UUID4.
 
 from immagent.agent import ImmAgent
 from immagent.assets import SystemPrompt
+from immagent.ephemeral import Agent
 from immagent.exceptions import (
     AgentNotFoundError,
     AssetNotFoundError,
@@ -24,6 +25,7 @@ from immagent.store import MemoryStore, Store
 
 __all__ = [
     # Core types
+    "Agent",
     "ImmAgent",
     "Message",
     "Conversation",

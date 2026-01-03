@@ -4,6 +4,34 @@ An immutable agent architecture for Python. Every state transition creates a new
 
 ## Quick Start
 
+### Ephemeral Agent (Simple)
+
+For quick scripts and experimentation—no database, no UUIDs, just chat:
+
+```python
+import asyncio
+from immagent import Agent
+
+async def main():
+    agent = Agent(
+        name="Assistant",
+        system_prompt="You are helpful.",
+        model="anthropic/claude-3-5-haiku-20241022",
+    )
+
+    await agent.advance("Hello!")  # Mutates in place
+    await agent.advance("What's 2+2?")
+
+    for msg in agent.messages:
+        print(f"{msg.role}: {msg.content}")
+
+asyncio.run(main())
+```
+
+### Persistent Agent (Immutable)
+
+For production use with full history and database persistence:
+
 ```python
 import asyncio
 import immagent
@@ -30,6 +58,18 @@ asyncio.run(main())
 ```
 
 ## Public API
+
+### Ephemeral Agent
+
+| Method | Description |
+|--------|-------------|
+| `Agent(name, system_prompt, model)` | Create an ephemeral agent |
+| `agent.advance(input)` | Process input and mutate in place |
+| `agent.messages` | Get all messages |
+| `agent.last_response` | Get last assistant response |
+| `agent.get_token_usage()` | Get (input_tokens, output_tokens) |
+
+### Persistent Agent (Store + ImmAgent)
 
 | Method | Description |
 |--------|-------------|
@@ -65,6 +105,18 @@ Because everything is immutable:
 - **Safe caching** — once loaded, assets never change
 - **Full history** — follow `parent_id` to trace the agent's lineage
 - **Reproducibility** — given an agent ID, you can reconstruct its exact state
+
+## Two Agent Types
+
+| | `Agent` (Ephemeral) | `ImmAgent` (Persistent) |
+|---|---|---|
+| **Use case** | Quick scripts, experimentation | Production with full history |
+| **Persistence** | None (in-memory only) | PostgreSQL |
+| **Mutability** | Mutable (`advance()` modifies in place) | Immutable (`advance()` returns new agent) |
+| **IDs** | None | UUID for every state |
+| **Lineage** | None | Full parent chain |
+
+Both use the same LLM orchestration under the hood (`advance.py`).
 
 ## Installation
 
@@ -397,14 +449,17 @@ make test
 ```
 src/immagent/
 ├── __init__.py     # Public API exports
-├── store.py        # Store (main interface - cache + db)
+├── advance.py      # Pure LLM orchestration (no persistence)
 ├── agent.py        # ImmAgent dataclass with methods
 ├── assets.py       # Asset base class, SystemPrompt
+├── ephemeral.py    # Simple mutable Agent for quick scripts
 ├── exceptions.py   # Custom exception types
 ├── llm.py          # LiteLLM wrapper with retries/timeout
 ├── logging.py      # Logging configuration
 ├── mcp.py          # MCP client for tools
-└── messages.py     # Message, ToolCall, Conversation
+├── messages.py     # Message, ToolCall, Conversation
+├── registry.py     # Agent-to-store mapping (WeakKeyDictionary)
+└── store.py        # Store (main interface - cache + db)
 ```
 
 ## Design Decisions
@@ -412,7 +467,9 @@ src/immagent/
 - **Frozen dataclasses** — Simple, Pythonic, no ORM magic
 - **Weak ref cache** — Auto-cleanup when assets are dropped, no size tuning
 - **Write-through** — Save to DB immediately, then cache; losing cache entries is safe
-- **Agent-store binding** — Agents hold a `_store` reference to prevent mixing stores
+- **Agent-store binding** — WeakKeyDictionary maps agents to stores; auto-cleanup when agents are garbage collected
+- **Pure advance function** — LLM orchestration is a pure function (data in, messages out); Store handles persistence around it
+- **Persistence on assets** — Each asset type knows how to serialize itself (`from_row`, `to_insert_params`)
 - **Token tracking** — `input_tokens`/`output_tokens` on assistant messages
 - **MCP for tools** — Standard protocol instead of custom tool system
 - **LiteLLM** — Multi-provider LLM support without custom abstractions
