@@ -88,7 +88,7 @@ asyncio.run(main())
 | `agent.get_messages()` | Get conversation messages |
 | `agent.get_lineage()` | Walk agent's parent chain |
 | `agent.clone()` | Clone agent with new ID |
-| `immagent.Model` | Enum of common LLM models |
+| `immagent.Model` | Constants for common LLM models |
 | `immagent.MCPManager` | MCP tool server manager |
 
 ## Core Concept

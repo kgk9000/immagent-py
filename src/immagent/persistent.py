@@ -203,10 +203,16 @@ class PersistentAgent(assets.Asset):
         return await get_store(self)._get_agent_lineage(self)
 
     async def clone(self) -> PersistentAgent:
-        """Create a clone of this agent for branching.
+        """Create a sibling clone of this agent for branching.
 
-        The clone shares the same parent, conversation, and system prompt,
-        allowing you to advance it in a different direction.
+        The clone has a new UUID but shares the same parent_id, conversation,
+        and system prompt. This creates a sibling in the lineage tree, not a child.
+
+        Use this to explore different conversation branches from the same point:
+            agent_a = await agent.clone()
+            agent_b = await agent.clone()
+            agent_a = await agent_a.advance("Option A")
+            agent_b = await agent_b.advance("Option B")
         """
         return await get_store(self)._clone_agent(self)
 
