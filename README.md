@@ -65,9 +65,9 @@ asyncio.run(main())
 |--------|-------------|
 | `SimpleAgent(name, system_prompt, model)` | Create an in-memory agent |
 | `agent.advance(input)` | Process input and return new agent |
-| `agent.get_messages()` | Get all messages |
-| `agent.get_last_response()` | Get last assistant response |
-| `agent.get_token_usage()` | Get (input_tokens, output_tokens) |
+| `agent.messages()` | Get all messages |
+| `agent.last_response()` | Get last assistant response |
+| `agent.token_usage()` | Get (input_tokens, output_tokens) |
 
 ### PersistentAgent (with Store)
 

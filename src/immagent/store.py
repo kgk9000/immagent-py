@@ -674,7 +674,7 @@ class Store:
 
         return new_agent
 
-    async def _get_agent_messages(self, agent: PersistentAgent) -> tuple[messages.Message, ...]:
+    async def _agent_messages(self, agent: PersistentAgent) -> tuple[messages.Message, ...]:
         """Get all messages in an agent's conversation (internal).
 
         Use agent.get_messages() instead.
@@ -727,7 +727,7 @@ class Store:
         await self._save(new_agent)
         return new_agent
 
-    async def _get_agent_lineage(self, agent: PersistentAgent) -> list[PersistentAgent]:
+    async def _agent_lineage(self, agent: PersistentAgent) -> list[PersistentAgent]:
         """Get the agent's lineage (internal).
 
         Use agent.get_lineage() instead.

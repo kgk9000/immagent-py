@@ -189,7 +189,7 @@ class TestGetMessages:
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        messages = await agent.get_messages()
+        messages = await agent.messages()
 
         assert messages == ()
 
@@ -471,7 +471,7 @@ class TestGetLineage:
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        lineage = await agent.get_lineage()
+        lineage = await agent.lineage()
 
         assert len(lineage) == 1
         assert lineage[0].id == agent.id
@@ -490,7 +490,7 @@ class TestGetLineage:
         agent2 = agent1._evolve(conv)
         await store._save(agent2)
 
-        lineage = await agent2.get_lineage()
+        lineage = await agent2.lineage()
 
         assert len(lineage) == 2
         assert lineage[0].id == agent1.id
@@ -752,7 +752,7 @@ class TestTokenUsage:
             model=immagent.Model.CLAUDE_3_5_HAIKU,
         )
 
-        input_tokens, output_tokens = await agent.get_token_usage()
+        input_tokens, output_tokens = await agent.token_usage()
 
         assert input_tokens == 0
         assert output_tokens == 0
@@ -778,7 +778,7 @@ class TestTokenUsage:
         agent2 = agent._evolve(conv)
         await store._save(agent2)
 
-        input_tokens, output_tokens = await agent2.get_token_usage()
+        input_tokens, output_tokens = await agent2.token_usage()
 
         assert input_tokens == 25  # 10 + 15
         assert output_tokens == 13  # 5 + 8
@@ -804,7 +804,7 @@ class TestTokenUsage:
         agent2 = agent._evolve(conv)
         await store._save(agent2)
 
-        input_tokens, output_tokens = await agent2.get_token_usage()
+        input_tokens, output_tokens = await agent2.token_usage()
 
         assert input_tokens == 10
         assert output_tokens == 5

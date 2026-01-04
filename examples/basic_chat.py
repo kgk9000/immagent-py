@@ -50,13 +50,13 @@ async def main():
             agent = await agent.advance(user_input)
 
             # Get the last message (assistant's response)
-            messages = await agent.get_messages()
+            messages = await agent.messages()
             if messages:
                 last_message = messages[-1]
                 print(f"Assistant: {last_message.content}\n")
 
         # Show lineage
-        lineage = await agent.get_lineage()
+        lineage = await agent.lineage()
         print(f"\nAgent went through {len(lineage)} states")
 
 

@@ -109,16 +109,16 @@ class TestSimpleAgentProperties:
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
         )
-        assert agent.get_messages() == ()
+        assert agent.messages() == ()
 
     def test_last_response_none(self):
-        """get_last_response() returns None for new agent."""
+        """last_response() returns None for new agent."""
         agent = SimpleAgent(
             name="TestBot",
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
         )
-        assert agent.get_last_response() is None
+        assert agent.last_response() is None
 
     def test_model_config_default(self):
         """model_config returns empty dict by default."""
@@ -154,31 +154,31 @@ class TestSimpleAgentProperties:
 
 
 class TestSimpleAgentTokenUsage:
-    """Tests for SimpleAgent.get_token_usage()."""
+    """Tests for SimpleAgent.token_usage()."""
 
-    async def test_get_token_usage_is_async(self):
-        """get_token_usage is an async method for API consistency."""
+    async def test_token_usage_is_async(self):
+        """token_usage is an async method for API consistency."""
         agent = SimpleAgent(
             name="TestBot",
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
         )
-        # This would fail if get_token_usage was not async
-        result = agent.get_token_usage()
+        # This would fail if token_usage was not async
+        result = agent.token_usage()
         assert hasattr(result, "__await__")
         # Actually await it
         input_tokens, output_tokens = await result
         assert input_tokens == 0
         assert output_tokens == 0
 
-    async def test_get_token_usage_empty(self):
-        """get_token_usage returns (0, 0) for new agent."""
+    async def test_token_usage_empty(self):
+        """token_usage returns (0, 0) for new agent."""
         agent = SimpleAgent(
             name="TestBot",
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
         )
-        input_tokens, output_tokens = await agent.get_token_usage()
+        input_tokens, output_tokens = await agent.token_usage()
         assert input_tokens == 0
         assert output_tokens == 0
 
@@ -202,19 +202,19 @@ async def test_simple_agent_advance():
     agent2 = await agent1.advance("What is 2 + 2?")
 
     # Original agent unchanged
-    assert agent1.get_messages() == ()
+    assert agent1.messages() == ()
 
     # New agent has messages
-    assert len(agent2.get_messages()) == 2  # user + assistant
-    assert agent2.get_messages()[0].role == "user"
-    assert agent2.get_messages()[0].content == "What is 2 + 2?"
-    assert agent2.get_messages()[1].role == "assistant"
-    assert "4" in agent2.get_messages()[1].content
+    assert len(agent2.messages()) == 2  # user + assistant
+    assert agent2.messages()[0].role == "user"
+    assert agent2.messages()[0].content == "What is 2 + 2?"
+    assert agent2.messages()[1].role == "assistant"
+    assert "4" in agent2.messages()[1].content
 
 
 @needs_api_key
 async def test_simple_agent_last_response():
-    """SimpleAgent.get_last_response() returns the last assistant message."""
+    """SimpleAgent.last_response() returns the last assistant message."""
     agent = SimpleAgent(
         name="Calculator",
         system_prompt="You are a calculator. Only respond with numbers.",
@@ -223,8 +223,8 @@ async def test_simple_agent_last_response():
 
     agent = await agent.advance("What is 2 + 2?")
 
-    assert agent.get_last_response() is not None
-    assert "4" in agent.get_last_response()
+    assert agent.last_response() is not None
+    assert "4" in agent.last_response()
 
 
 @needs_api_key
@@ -238,7 +238,7 @@ async def test_simple_agent_token_tracking():
 
     agent = await agent.advance("What is 2 + 2?")
 
-    input_tokens, output_tokens = await agent.get_token_usage()
+    input_tokens, output_tokens = await agent.token_usage()
     assert input_tokens > 0
     assert output_tokens > 0
 
@@ -258,5 +258,5 @@ async def test_simple_agent_multi_turn():
     # Second turn - should remember context
     agent = await agent.advance("What is my name?")
 
-    assert "Alice" in agent.get_last_response()
-    assert len(agent.get_messages()) == 4  # 2 user + 2 assistant
+    assert "Alice" in agent.last_response()
+    assert len(agent.messages()) == 4  # 2 user + 2 assistant

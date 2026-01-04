@@ -48,7 +48,7 @@ async def test_advance_creates_new_agent(store: Store):
     assert agent2.parent_id == agent1.id
 
     # Verify messages
-    messages = await agent2.get_messages()
+    messages = await agent2.messages()
     assert len(messages) == 2  # user + assistant
     assert messages[0].role == "user"
     assert messages[0].content == "What is 2 + 2?"
@@ -72,12 +72,12 @@ async def test_advance_multi_turn(store: Store):
     agent = await agent.advance("What is my name?")
 
     # Verify it remembers
-    messages = await agent.get_messages()
+    messages = await agent.messages()
     last_response = messages[-1].content
     assert "Alice" in last_response
 
     # Verify lineage
-    lineage = await agent.get_lineage()
+    lineage = await agent.lineage()
     assert len(lineage) == 3  # original + 2 advances
 
 
@@ -92,7 +92,7 @@ async def test_token_tracking(store: Store):
 
     agent = await agent.advance("What is 2 + 2?")
 
-    messages = await agent.get_messages()
+    messages = await agent.messages()
     assistant_msg = messages[-1]
 
     # Verify token counts are present

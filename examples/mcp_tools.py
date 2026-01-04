@@ -57,7 +57,7 @@ async def main():
 
             # Show the conversation
             print("Conversation:")
-            for msg in await agent.get_messages():
+            for msg in await agent.messages():
                 if msg.tool_calls:
                     print(f"  {msg.role}: [called {msg.tool_calls[0].name}]")
                 elif msg.role == "tool":

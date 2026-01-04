@@ -198,21 +198,21 @@ class PersistentAgent(assets.Asset):
             top_p=top_p,
         )
 
-    async def get_messages(self) -> tuple[messages.Message, ...]:
+    async def messages(self) -> tuple[messages.Message, ...]:
         """Get all messages in this agent's conversation."""
-        return await get_store(self)._get_agent_messages(self)
+        return await get_store(self)._agent_messages(self)
 
-    async def get_last_response(self) -> str | None:
+    async def last_response(self) -> str | None:
         """Get the last assistant response, or None if no responses yet."""
-        msgs = await self.get_messages()
+        msgs = await self.messages()
         for msg in reversed(msgs):
             if msg.role == "assistant" and msg.content:
                 return msg.content
         return None
 
-    async def get_lineage(self) -> list[PersistentAgent]:
+    async def lineage(self) -> list[PersistentAgent]:
         """Get the chain of agents from root to this agent."""
-        return await get_store(self)._get_agent_lineage(self)
+        return await get_store(self)._agent_lineage(self)
 
     async def clone(self) -> PersistentAgent:
         """Create a sibling clone of this agent for branching.
@@ -228,14 +228,14 @@ class PersistentAgent(assets.Asset):
         """
         return await get_store(self)._clone_agent(self)
 
-    async def get_token_usage(self) -> tuple[int, int]:
+    async def token_usage(self) -> tuple[int, int]:
         """Get total token usage for this agent's conversation.
 
         Returns:
             A tuple of (input_tokens, output_tokens) summed across all
             assistant messages in the conversation.
         """
-        msgs = await self.get_messages()
+        msgs = await self.messages()
         input_tokens = sum(m.input_tokens or 0 for m in msgs if m.role == "assistant")
         output_tokens = sum(m.output_tokens or 0 for m in msgs if m.role == "assistant")
         return input_tokens, output_tokens
