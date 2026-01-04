@@ -74,6 +74,8 @@ asyncio.run(main())
 | Method | Description |
 |--------|-------------|
 | `Store.connect(dsn)` | Connect to PostgreSQL |
+| `store.close()` | Close connection pool |
+| `store.ping()` | Check if database connection is alive |
 | `store.init_schema()` | Create tables if not exist |
 | `store.create_agent()` | Create and save a new agent |
 | `store.load_agent(id)` | Load agent by UUID |
@@ -352,6 +354,7 @@ Exception hierarchy:
   - `AssetNotFoundError` — asset lookup failed
     - `AgentNotFoundError`
     - `MessageNotFoundError`
+  - `AgentNotRegisteredError` — agent not associated with a store
   - `LLMError` — LLM call failed
   - `ToolExecutionError` — MCP tool execution failed
 

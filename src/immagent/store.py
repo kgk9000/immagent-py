@@ -130,6 +130,23 @@ class Store:
         """Close the database connection pool."""
         await self._pool.close()
 
+    async def ping(self) -> bool:
+        """Check if the database connection is alive.
+
+        Returns:
+            True if the connection is healthy, False otherwise.
+
+        Example:
+            if not await store.ping():
+                logger.error("Database connection lost")
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            return True
+        except Exception:
+            return False
+
     async def __aenter__(self) -> "Store":
         return self
 
