@@ -50,6 +50,19 @@ clean: ## Remove build artifacts and caches
 	rm -rf .venv/ .pytest_cache/ .ruff_cache/ dist/ build/ *.egg-info/
 	find . -type d -name __pycache__ -exec rm -rf {} +
 
+.PHONY: build
+build: ## Build package for distribution
+	rm -rf dist/ build/
+	uv build
+
+.PHONY: publish
+publish: build ## Publish to PyPI (requires PyPI credentials)
+	uv publish
+
+.PHONY: publish-test
+publish-test: build ## Publish to TestPyPI (for testing)
+	uv publish --publish-url https://test.pypi.org/legacy/
+
 .PHONY: db-init
 db-init: ## Initialize database schema (requires DATABASE_URL)
 	uv run python -c "import asyncio; from immagent import Database; asyncio.run(Database.connect('$${DATABASE_URL}').init_schema())"

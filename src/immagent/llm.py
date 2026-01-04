@@ -85,7 +85,28 @@ async def complete(
     try:
         response = await litellm.acompletion(**kwargs)
     except Exception as e:
-        raise exc.LLMError(f"LLM call failed: {e}") from e
+        # Handle specific error types with better messages
+        error_type = type(e).__name__
+        if error_type == "AuthenticationError":
+            # Extract provider from model string (e.g., "anthropic/claude-..." -> "anthropic")
+            provider = model.split("/")[0] if "/" in model else model
+            env_var_hints = {
+                "anthropic": "ANTHROPIC_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "azure": "AZURE_API_KEY",
+                "cohere": "COHERE_API_KEY",
+                "google": "GOOGLE_API_KEY",
+                "mistral": "MISTRAL_API_KEY",
+            }
+            hint = env_var_hints.get(provider, f"{provider.upper()}_API_KEY")
+            raise exc.LLMError(
+                f"Authentication failed for {provider}. "
+                f"Check that {hint} is set and valid."
+            ) from e
+        elif error_type == "RateLimitError":
+            raise exc.LLMError(f"Rate limit exceeded: {e}") from e
+        else:
+            raise exc.LLMError(f"LLM call failed: {e}") from e
 
     # Check for empty response (can happen with content filtering)
     choices = getattr(response, "choices", None)
