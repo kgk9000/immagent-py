@@ -28,7 +28,7 @@ class SimpleAgent:
         )
         agent = await agent.advance("Hello!")
         agent = await agent.advance("What's 2+2?")
-        for msg in agent.messages:
+        for msg in agent.get_messages():
             print(f"{msg.role}: {msg.content}")
     """
 
@@ -39,6 +39,7 @@ class SimpleAgent:
         system_prompt: str,
         model: str,
         model_config: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         _messages: list[Message] | None = None,
     ):
         """Create a new simple agent.
@@ -48,6 +49,7 @@ class SimpleAgent:
             system_prompt: The system prompt content
             model: LiteLLM model string (e.g., "anthropic/claude-3-5-haiku-20241022")
             model_config: Optional LLM configuration (temperature, max_tokens, etc.)
+            metadata: Optional custom key-value data attached to the agent
 
         Raises:
             ValidationError: If any input is invalid
@@ -63,6 +65,7 @@ class SimpleAgent:
         self._name = name
         self._model = model
         self._model_config = model_config or {}
+        self._metadata = metadata or {}
         self._system_prompt = system_prompt
         self._messages: tuple[Message, ...] = tuple(_messages) if _messages else ()
 
@@ -82,22 +85,64 @@ class SimpleAgent:
         return dict(self._model_config)
 
     @property
+    def metadata(self) -> dict[str, Any]:
+        """Get the metadata."""
+        return dict(self._metadata)
+
+    @property
     def system_prompt(self) -> str:
         """Get the system prompt."""
         return self._system_prompt
 
-    @property
-    def messages(self) -> list[Message]:
+    def get_messages(self) -> tuple[Message, ...]:
         """Get all messages in the conversation."""
-        return list(self._messages)
+        return self._messages
 
-    @property
-    def last_response(self) -> str | None:
+    def get_last_response(self) -> str | None:
         """Get the last assistant response, or None if no responses yet."""
         for msg in reversed(self._messages):
             if msg.role == "assistant" and msg.content:
                 return msg.content
         return None
+
+    def clone(self) -> "SimpleAgent":
+        """Create a clone of this agent for branching conversations.
+
+        Use this to explore different conversation branches from the same point:
+            agent_a = agent.clone()
+            agent_b = agent.clone()
+            agent_a = await agent_a.advance("Option A")
+            agent_b = await agent_b.advance("Option B")
+
+        Returns:
+            A new SimpleAgent with the same state.
+        """
+        return SimpleAgent(
+            name=self._name,
+            system_prompt=self._system_prompt,
+            model=self._model,
+            model_config=self._model_config,
+            metadata=self._metadata,
+            _messages=list(self._messages),
+        )
+
+    def with_metadata(self, metadata: dict[str, Any]) -> "SimpleAgent":
+        """Create a new agent with updated metadata.
+
+        Args:
+            metadata: New metadata (replaces existing metadata)
+
+        Returns:
+            A new agent with updated metadata.
+        """
+        return SimpleAgent(
+            name=self._name,
+            system_prompt=self._system_prompt,
+            model=self._model,
+            model_config=self._model_config,
+            metadata=metadata,
+            _messages=list(self._messages),
+        )
 
     async def advance(
         self,
@@ -139,7 +184,7 @@ class SimpleAgent:
         new_messages = await advance_mod.advance(
             model=self._model,
             system_prompt=self._system_prompt,
-            history=list(self._messages),
+            history=self._messages,
             user_input=user_input,
             mcp=mcp,
             max_tool_rounds=max_tool_rounds,
@@ -154,6 +199,7 @@ class SimpleAgent:
             system_prompt=self._system_prompt,
             model=self._model,
             model_config=self._model_config,
+            metadata=self._metadata,
             _messages=list(self._messages) + new_messages,
         )
 

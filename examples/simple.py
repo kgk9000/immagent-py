@@ -35,7 +35,7 @@ async def main():
 
     # Show conversation
     print("Conversation:")
-    for msg in agent.messages:
+    for msg in agent.get_messages():
         print(f"  {msg.role}: {msg.content}")
 
     # Get total token usage
@@ -43,7 +43,7 @@ async def main():
     print(f"\nToken usage: {input_tokens} input, {output_tokens} output")
 
     # Get last response
-    print(f"\nLast response: {agent.last_response}")
+    print(f"\nLast response: {agent.get_last_response()}")
 
 
 if __name__ == "__main__":
