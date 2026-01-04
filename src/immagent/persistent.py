@@ -198,9 +198,17 @@ class PersistentAgent(assets.Asset):
             top_p=top_p,
         )
 
-    async def get_messages(self) -> list[messages.Message]:
+    async def get_messages(self) -> tuple[messages.Message, ...]:
         """Get all messages in this agent's conversation."""
         return await get_store(self)._get_agent_messages(self)
+
+    async def get_last_response(self) -> str | None:
+        """Get the last assistant response, or None if no responses yet."""
+        msgs = await self.get_messages()
+        for msg in reversed(msgs):
+            if msg.role == "assistant" and msg.content:
+                return msg.content
+        return None
 
     async def get_lineage(self) -> list[PersistentAgent]:
         """Get the chain of agents from root to this agent."""

@@ -216,9 +216,9 @@ class Store:
                 return msg
         return None
 
-    async def _get_messages(self, message_ids: tuple[UUID, ...]) -> list[messages.Message]:
+    async def _get_messages(self, message_ids: tuple[UUID, ...]) -> tuple[messages.Message, ...]:
         if not message_ids:
-            return []
+            return ()
 
         msgs_by_id: dict[UUID, messages.Message] = {}
         to_load: list[UUID] = []
@@ -248,7 +248,7 @@ class Store:
             if mid not in msgs_by_id:
                 raise exc.MessageNotFoundError(mid)
 
-        return [msgs_by_id[mid] for mid in message_ids]
+        return tuple(msgs_by_id[mid] for mid in message_ids)
 
     async def _get_conversation(self, conversation_id: UUID) -> messages.Conversation | None:
         cached = self._get_cached(conversation_id)
@@ -674,7 +674,7 @@ class Store:
 
         return new_agent
 
-    async def _get_agent_messages(self, agent: PersistentAgent) -> list[messages.Message]:
+    async def _get_agent_messages(self, agent: PersistentAgent) -> tuple[messages.Message, ...]:
         """Get all messages in an agent's conversation (internal).
 
         Use agent.get_messages() instead.

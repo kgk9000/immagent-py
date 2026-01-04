@@ -103,22 +103,22 @@ class TestSimpleAgentProperties:
         assert agent.system_prompt == "You are helpful."
 
     def test_messages_empty(self):
-        """messages property returns empty list for new agent."""
+        """messages property returns empty tuple for new agent."""
         agent = SimpleAgent(
             name="TestBot",
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
         )
-        assert agent.messages == []
+        assert agent.get_messages() == ()
 
     def test_last_response_none(self):
-        """last_response returns None for new agent."""
+        """get_last_response() returns None for new agent."""
         agent = SimpleAgent(
             name="TestBot",
             system_prompt="You are helpful.",
             model="anthropic/claude-3-5-haiku-20241022",
         )
-        assert agent.last_response is None
+        assert agent.get_last_response() is None
 
     def test_model_config_default(self):
         """model_config returns empty dict by default."""
@@ -202,19 +202,19 @@ async def test_simple_agent_advance():
     agent2 = await agent1.advance("What is 2 + 2?")
 
     # Original agent unchanged
-    assert agent1.messages == []
+    assert agent1.get_messages() == ()
 
     # New agent has messages
-    assert len(agent2.messages) == 2  # user + assistant
-    assert agent2.messages[0].role == "user"
-    assert agent2.messages[0].content == "What is 2 + 2?"
-    assert agent2.messages[1].role == "assistant"
-    assert "4" in agent2.messages[1].content
+    assert len(agent2.get_messages()) == 2  # user + assistant
+    assert agent2.get_messages()[0].role == "user"
+    assert agent2.get_messages()[0].content == "What is 2 + 2?"
+    assert agent2.get_messages()[1].role == "assistant"
+    assert "4" in agent2.get_messages()[1].content
 
 
 @needs_api_key
 async def test_simple_agent_last_response():
-    """SimpleAgent.last_response returns the last assistant message."""
+    """SimpleAgent.get_last_response() returns the last assistant message."""
     agent = SimpleAgent(
         name="Calculator",
         system_prompt="You are a calculator. Only respond with numbers.",
@@ -223,8 +223,8 @@ async def test_simple_agent_last_response():
 
     agent = await agent.advance("What is 2 + 2?")
 
-    assert agent.last_response is not None
-    assert "4" in agent.last_response
+    assert agent.get_last_response() is not None
+    assert "4" in agent.get_last_response()
 
 
 @needs_api_key
@@ -258,5 +258,5 @@ async def test_simple_agent_multi_turn():
     # Second turn - should remember context
     agent = await agent.advance("What is my name?")
 
-    assert "Alice" in agent.last_response
-    assert len(agent.messages) == 4  # 2 user + 2 assistant
+    assert "Alice" in agent.get_last_response()
+    assert len(agent.get_messages()) == 4  # 2 user + 2 assistant

@@ -20,7 +20,7 @@ async def advance(
     *,
     model: str,
     system_prompt: str,
-    history: list[messages.Message],
+    history: tuple[messages.Message, ...],
     user_input: str,
     mcp: "MCPManager | None" = None,
     max_tool_rounds: int = 10,

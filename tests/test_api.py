@@ -191,7 +191,7 @@ class TestGetMessages:
 
         messages = await agent.get_messages()
 
-        assert messages == []
+        assert messages == ()
 
 
 class TestDelete:
