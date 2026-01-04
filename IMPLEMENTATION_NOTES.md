@@ -57,7 +57,7 @@ _store: Store = field(compare=True, hash=False, repr=False)
 
 **Why:**
 1. **`compare=True` is irrelevant** — ImmAgent identity is UUID-based. You wouldn't have the same UUID in different stores, so this never matters in practice.
-2. **Underscore is intentional** — `_store` is internal plumbing for cache/DB access. Users shouldn't touch it; they interact via `agent.advance()`, `agent.get_messages()`, etc. which delegate to the store.
+2. **Underscore is intentional** — `_store` is internal plumbing for cache/DB access. Users shouldn't touch it; they interact via `agent.advance()`, `agent.messages()`, etc. which delegate to the store.
 
 ---
 
@@ -148,7 +148,7 @@ while current.parent_id is not None:
 
 **Location:** `store.py:809-875`
 
-**Observation:** `get_lineage()` was loading parents one at a time in a loop.
+**Observation:** `lineage()` was loading parents one at a time in a loop.
 
 **Status:** ✅ Fixed
 

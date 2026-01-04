@@ -28,7 +28,7 @@ class SimpleAgent:
         )
         agent = await agent.advance("Hello!")
         agent = await agent.advance("What's 2+2?")
-        for msg in agent.get_messages():
+        for msg in agent.messages():
             print(f"{msg.role}: {msg.content}")
     """
 
@@ -94,11 +94,11 @@ class SimpleAgent:
         """Get the system prompt."""
         return self._system_prompt
 
-    def get_messages(self) -> tuple[Message, ...]:
+    def messages(self) -> tuple[Message, ...]:
         """Get all messages in the conversation."""
         return self._messages
 
-    def get_last_response(self) -> str | None:
+    def last_response(self) -> str | None:
         """Get the last assistant response, or None if no responses yet."""
         for msg in reversed(self._messages):
             if msg.role == "assistant" and msg.content:
@@ -203,7 +203,7 @@ class SimpleAgent:
             _messages=list(self._messages) + new_messages,
         )
 
-    async def get_token_usage(self) -> tuple[int, int]:
+    async def token_usage(self) -> tuple[int, int]:
         """Get total token usage for this conversation.
 
         Returns:
