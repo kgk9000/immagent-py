@@ -43,3 +43,7 @@ chat: ## Run basic_chat.py interactive example
 .PHONY: mcp-tools
 mcp-tools: ## Run mcp_tools.py example
 	uv run python mcp_tools.py
+
+.PHONY: web-reader
+web-reader: ## Run web_reader.py example (requires playwright-mcp)
+	uv run python web_reader.py

@@ -98,6 +98,7 @@ class MCPManager:
         command: str,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> None:
         """Connect to an MCP server.
 
@@ -106,11 +107,13 @@ class MCPManager:
             command: The command to run the MCP server
             args: Optional arguments to the command
             env: Optional environment variables
+            cwd: Optional working directory for the server process
         """
         server_params = StdioServerParameters(
             command=command,
             args=args or [],
             env=env,
+            cwd=cwd,
         )
 
         # Use exit stack for proper cleanup on errors
